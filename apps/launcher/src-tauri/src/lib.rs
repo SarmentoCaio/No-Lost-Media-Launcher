@@ -8,6 +8,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -199,6 +200,15 @@ struct InstalledGame {
     last_played_at: Option<String>,
     play_time_minutes: u64,
     local_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    managed: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoveGameResult {
+    game_files_deleted: bool,
+    save_files_deleted: usize,
 }
 
 #[derive(Deserialize)]
@@ -276,6 +286,17 @@ impl AppState {
 fn deep_link_from_args(args: impl IntoIterator<Item = String>) -> Option<String> {
     args.into_iter()
         .find(|value| value.starts_with("nolostmedia://"))
+}
+
+fn safe_path_component(value: &str) -> Result<&str, String> {
+    if value.is_empty()
+        || value.contains(['/', '\\', ':'])
+        || matches!(value, "." | "..")
+        || value.contains("..")
+    {
+        return Err("O identificador do jogo não é válido.".into());
+    }
+    Ok(value)
 }
 
 fn deliver_deep_link(app: &tauri::AppHandle, url: String) {
@@ -1848,6 +1869,7 @@ fn import_local_game(
             .and_then(|item| item.last_played_at.clone()),
         play_time_minutes: previous.map(|item| item.play_time_minutes).unwrap_or(0),
         local_path: Some(canonical.to_string_lossy().into_owned()),
+        managed: Some(false),
     };
     library.push(installed.clone());
     write_json(&state.library_index_path(), &library)?;
@@ -1916,6 +1938,7 @@ async fn install_game(
             .and_then(|item| item.last_played_at.clone()),
         play_time_minutes: previous.map(|item| item.play_time_minutes).unwrap_or(0),
         local_path: Some(local_path.to_string_lossy().into_owned()),
+        managed: Some(true),
     };
     library.push(installed.clone());
     write_json(&library_index_path, &library)?;
@@ -2034,6 +2057,27 @@ fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String
             }
             let config_path = emulator_dir.join("NoLostMedia.cfg");
             let runtime_config = apply_retroarch_detailed(emulator_dir, &emulator_settings)?;
+            let library_path = config
+                .library_path
+                .as_ref()
+                .ok_or_else(|| "A pasta da biblioteca não está configurada.".to_string())?;
+            let game_save_dir = library_path
+                .join("saves")
+                .join(safe_path_component(&game.system)?)
+                .join(safe_path_component(&game.id)?);
+            let game_state_dir = game_save_dir.join("states");
+            fs::create_dir_all(&game_state_dir).map_err(|error| error.to_string())?;
+            let normalized_save_dir = game_save_dir.to_string_lossy().replace('\\', "/");
+            let normalized_state_dir = game_state_dir.to_string_lossy().replace('\\', "/");
+            let mut runtime_file = fs::OpenOptions::new()
+                .append(true)
+                .open(&runtime_config)
+                .map_err(|error| error.to_string())?;
+            writeln!(
+                runtime_file,
+                "savefile_directory = \"{normalized_save_dir}\"\nsavestate_directory = \"{normalized_state_dir}\""
+            )
+            .map_err(|error| error.to_string())?;
             if config.settings.start_fullscreen {
                 command.arg("-f");
             }
@@ -2053,11 +2097,202 @@ fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String
     Ok(())
 }
 
+fn count_regular_files(root: &Path) -> Result<usize, String> {
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            count += count_regular_files(&entry.path())?;
+        } else if kind.is_file() {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn save_file_matches(file_name: &str, game_stem: &str) -> bool {
+    let name = file_name.to_lowercase();
+    let stem = game_stem.to_lowercase();
+    !stem.is_empty() && (name == stem || name.starts_with(&format!("{stem}.")))
+}
+
+fn remove_legacy_save_files(root: &Path, game_stem: &str) -> Result<usize, String> {
+    if !root.exists() || game_stem.is_empty() {
+        return Ok(0);
+    }
+    let mut deleted = 0;
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            deleted += remove_legacy_save_files(&entry.path(), game_stem)?;
+        } else if kind.is_file()
+            && save_file_matches(&entry.file_name().to_string_lossy(), game_stem)
+        {
+            fs::remove_file(entry.path()).map_err(|error| error.to_string())?;
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
+}
+
+fn direct_managed_directory(root: &Path, candidate: &Path) -> Result<Option<PathBuf>, String> {
+    if !candidate.is_dir() {
+        return Ok(None);
+    }
+    let canonical_root = root.canonicalize().map_err(|error| error.to_string())?;
+    let canonical_candidate = candidate
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if canonical_candidate.parent() != Some(canonical_root.as_path()) {
+        return Err("O launcher recusou apagar uma pasta fora da biblioteca gerenciada.".into());
+    }
+    Ok(Some(canonical_candidate))
+}
+
 #[tauri::command]
-fn remove_game(game_id: String, state: State<'_, AppState>) -> Result<(), String> {
+fn remove_game(
+    game: GameInput,
+    delete_saves: bool,
+    state: State<'_, AppState>,
+) -> Result<RemoveGameResult, String> {
+    let game_id = safe_path_component(&game.id)?;
+    let system = safe_path_component(&game.system)?;
+    let config: AppConfig = read_json(&state.config_path());
+    let library_path = config
+        .library_path
+        .ok_or_else(|| "A pasta da biblioteca não está configurada.".to_string())?;
     let mut library: Vec<InstalledGame> = read_json(&state.library_index_path());
-    library.retain(|item| item.game_id != game_id);
-    write_json(&state.library_index_path(), &library)
+    let installed = library
+        .iter()
+        .find(|item| item.game_id == game.id)
+        .cloned()
+        .ok_or_else(|| "O jogo não está na biblioteca local.".to_string())?;
+
+    let managed_games_root = library_path.join("games").join(system);
+    let managed_game_dir = managed_games_root.join(game_id);
+    let game_files_deleted = if let Some(managed_canonical) =
+        direct_managed_directory(&managed_games_root, &managed_game_dir)?
+    {
+        let inferred_managed = installed
+            .local_path
+            .as_ref()
+            .map(PathBuf::from)
+            .and_then(|path| path.canonicalize().ok())
+            .is_some_and(|path| path.starts_with(&managed_canonical));
+        let local_is_managed = installed.managed.unwrap_or(inferred_managed);
+        if local_is_managed {
+            fs::remove_dir_all(&managed_canonical)
+                .map_err(|error| format!("Não foi possível apagar os arquivos do jogo: {error}"))?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let cache_root = library_path.join("cache").join("games");
+    let cache_dir = cache_root.join(game_id);
+    if let Some(cache_canonical) = direct_managed_directory(&cache_root, &cache_dir)? {
+        let _ = fs::remove_dir_all(cache_canonical);
+    }
+
+    let mut save_files_deleted = 0;
+    if delete_saves {
+        let saves_root = library_path.join("saves").join(system);
+        let per_game_saves = saves_root.join(game_id);
+        if let Some(saves_canonical) = direct_managed_directory(&saves_root, &per_game_saves)? {
+            save_files_deleted += count_regular_files(&saves_canonical)?;
+            fs::remove_dir_all(&saves_canonical)
+                .map_err(|error| format!("Não foi possível apagar os saves do jogo: {error}"))?;
+        }
+        if matches!(
+            game.system.as_str(),
+            "nes" | "snes" | "gba" | "n64" | "dreamcast"
+        ) {
+            if let Some(game_stem) = installed
+                .local_path
+                .as_ref()
+                .and_then(|path| Path::new(path).file_stem())
+                .and_then(|value| value.to_str())
+            {
+                let saves_root = library_path.join("saves");
+                let legacy_root = saves_root.join("retroarch");
+                if let Some(legacy_canonical) = direct_managed_directory(&saves_root, &legacy_root)?
+                {
+                    save_files_deleted += remove_legacy_save_files(&legacy_canonical, game_stem)?;
+                }
+            }
+        }
+    }
+
+    library.retain(|item| item.game_id != game.id);
+    write_json(&state.library_index_path(), &library)?;
+    Ok(RemoveGameResult {
+        game_files_deleted,
+        save_files_deleted,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{direct_managed_directory, remove_legacy_save_files, save_file_matches};
+    use std::fs;
+
+    #[test]
+    fn save_files_are_matched_by_the_complete_game_stem() {
+        assert!(save_file_matches("Pokemon Emerald.srm", "Pokemon Emerald"));
+        assert!(save_file_matches(
+            "Pokemon Emerald.state.auto.png",
+            "Pokemon Emerald"
+        ));
+        assert!(!save_file_matches(
+            "Pokemon Emerald 2.srm",
+            "Pokemon Emerald"
+        ));
+        assert!(!save_file_matches("Pokemon.srm", "Pokemon Emerald"));
+    }
+
+    #[test]
+    fn only_the_selected_games_legacy_saves_are_removed() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let core_dir = temporary.path().join("retroarch").join("mGBA");
+        fs::create_dir_all(&core_dir).expect("save directory");
+        fs::write(core_dir.join("Pokemon Emerald.srm"), b"save").expect("save file");
+        fs::write(core_dir.join("Pokemon Emerald.state.auto"), b"state").expect("state file");
+        fs::write(core_dir.join("Pokemon Emerald 2.srm"), b"other").expect("other save");
+
+        let deleted =
+            remove_legacy_save_files(temporary.path(), "Pokemon Emerald").expect("save cleanup");
+
+        assert_eq!(deleted, 2);
+        assert!(core_dir.join("Pokemon Emerald 2.srm").is_file());
+    }
+
+    #[test]
+    fn destructive_directories_must_be_direct_children_of_the_managed_root() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let managed_root = temporary.path().join("games");
+        let direct_child = managed_root.join("game-id");
+        let nested_child = direct_child.join("unexpected");
+        fs::create_dir_all(&nested_child).expect("managed directories");
+
+        assert!(direct_managed_directory(&managed_root, &direct_child)
+            .expect("direct child validation")
+            .is_some());
+        assert!(direct_managed_directory(&managed_root, &nested_child).is_err());
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -20,6 +20,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   Volume2,
   X,
 } from "lucide-react";
@@ -312,6 +313,8 @@ export function App() {
   const [catalogPage, setCatalogPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(48);
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+  const [gameToRemove, setGameToRemove] = useState<Game | null>(null);
+  const [removingGameId, setRemovingGameId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Record<string, DownloadTask>>(restoreGameDownloads);
   const [emulatorTasks, setEmulatorTasks] = useState<Record<string, EmulatorTask>>(restoreEmulatorDownloads);
   const [stoppingDownloads, setStoppingDownloads] = useState<Set<string>>(new Set());
@@ -928,6 +931,34 @@ export function App() {
     return game.sourceUrl ? installGame(game) : runtimeInfo?.mode === "native" ? importLocalGame(game) : installGame(game);
   };
 
+  const removeInstalledGame = async (game: Game, deleteSaves: boolean) => {
+    setRemovingGameId(game.id);
+    try {
+      const result = await runtime.removeGame(game, deleteSaves);
+      setInstalled((current) => current.filter((item) => item.gameId !== game.id));
+      setTasks((current) => {
+        const next = { ...current };
+        delete next[game.id];
+        return next;
+      });
+      setSelectedGame(null);
+      setGameToRemove(null);
+      const gameMessage = result.gameFilesDeleted
+        ? `${game.title} e seus arquivos foram apagados.`
+        : `${game.title} foi removido da biblioteca; o arquivo importado foi preservado.`;
+      const saveMessage = deleteSaves
+        ? result.saveFilesDeleted > 0
+          ? ` ${result.saveFilesDeleted} arquivo${result.saveFilesDeleted === 1 ? "" : "s"} de save também ${result.saveFilesDeleted === 1 ? "foi apagado" : "foram apagados"}.`
+          : " Nenhum save individual deste jogo foi encontrado."
+        : " Os saves foram mantidos.";
+      notify(`${gameMessage}${saveMessage}`, "success");
+    } catch (error) {
+      notify(readableError(error, "Não foi possível apagar o jogo."), "error");
+    } finally {
+      setRemovingGameId(null);
+    }
+  };
+
   const toggleFavorite = (gameId: string) => {
     setFavorites((current) => {
       const next = new Set(current);
@@ -1235,7 +1266,33 @@ export function App() {
               <button className={`primary-action primary-action--wide ${isDownloadActive(tasks[selectedGame.id]?.state) ? "primary-action--stop" : ""}`} disabled={stoppingDownloads.has(`game:${selectedGame.id}`)} onClick={() => void (isDownloadActive(tasks[selectedGame.id]?.state) ? stopGameDownload(selectedGame) : primaryAction(selectedGame))}>{installedById.has(selectedGame.id) ? <Play fill="currentColor" /> : isDownloadActive(tasks[selectedGame.id]?.state) ? <X /> : <Download />} {installedById.has(selectedGame.id) ? "Jogar agora" : tasks[selectedGame.id]?.state === "error" ? "Tentar baixar novamente" : tasks[selectedGame.id]?.state === "paused" ? "Continuar download" : isDownloadActive(tasks[selectedGame.id]?.state) ? stoppingDownloads.has(`game:${selectedGame.id}`) ? "Pausando download…" : "Pausar download" : selectedGame.sourceUrl ? "Baixar do acervo" : runtimeInfo?.mode === "native" ? "Adicionar arquivo local" : "Instalar jogo"}</button>
               {tasks[selectedGame.id] && <button className="dialog-secondary-action dialog-secondary-action--danger" type="button" disabled={stoppingDownloads.has(`game:${selectedGame.id}`)} onClick={() => void stopGameDownload(selectedGame, true)}>Cancelar e apagar o download</button>}
               {!installedById.has(selectedGame.id) && runtimeInfo?.mode === "native" && <button className="dialog-secondary-action" type="button" onClick={() => void importLocalGame(selectedGame)}>Usar um arquivo que já tenho</button>}
+              {installedById.has(selectedGame.id) && <button className="dialog-secondary-action dialog-secondary-action--danger" type="button" onClick={() => setGameToRemove(selectedGame)}><Trash2 size={14} /> Apagar jogo</button>}
               <p className="legal-note">Use apenas jogos e arquivos de sistema que você possui autorização para utilizar.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {gameToRemove && (
+        <div className="modal-layer removal-layer" role="dialog" aria-modal="true" aria-labelledby="remove-game-title" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !removingGameId) setGameToRemove(null);
+        }}>
+          <div className="removal-dialog">
+            <span className="removal-dialog__icon"><Trash2 /></span>
+            <div>
+              <span className="eyebrow">Gerenciar biblioteca</span>
+              <h2 id="remove-game-title">Apagar {gameToRemove.title}?</h2>
+              <p>O jogo baixado será apagado do computador e poderá ser baixado novamente pelo acervo.</p>
+              <p className="removal-dialog__note">Se este jogo foi apenas importado de outra pasta, o arquivo original será preservado.</p>
+            </div>
+            <div className="removal-dialog__actions">
+              <button type="button" disabled={Boolean(removingGameId)} onClick={() => setGameToRemove(null)}>Cancelar</button>
+              <button type="button" className="remove-keep-saves" disabled={Boolean(removingGameId)} onClick={() => void removeInstalledGame(gameToRemove, false)}>
+                <Trash2 size={15} /> {removingGameId ? "Apagando…" : "Apagar e manter saves"}
+              </button>
+              <button type="button" className="remove-with-saves" disabled={Boolean(removingGameId)} onClick={() => void removeInstalledGame(gameToRemove, true)}>
+                <Trash2 size={15} /> {removingGameId ? "Apagando…" : "Apagar jogo e saves"}
+              </button>
             </div>
           </div>
         </div>

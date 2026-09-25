@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, PlatformRuntime, RuntimeInfo } from "@nlm/core";
+import type { EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, PlatformRuntime, RemoveGameResult, RuntimeInfo } from "@nlm/core";
 
 export class TauriDesktopRuntime implements PlatformRuntime {
   getInfo(): Promise<RuntimeInfo> {
@@ -94,7 +94,7 @@ export class TauriDesktopRuntime implements PlatformRuntime {
     return invoke<void>("launch_game", { game });
   }
 
-  removeGame(gameId: string): Promise<void> {
-    return invoke<void>("remove_game", { gameId });
+  removeGame(game: Game, deleteSaves: boolean): Promise<RemoveGameResult> {
+    return invoke<RemoveGameResult>("remove_game", { game, deleteSaves });
   }
 }

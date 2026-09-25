@@ -1,6 +1,6 @@
 [package]
 name = "no-lost-media-launcher"
-version = "0.1.0"
+version = "0.1.1"
 description = "No Lost Media Launcher desktop runtime"
 authors = ["No Lost Media"]
 edition = "2021"
@@ -29,3 +29,6 @@ fs2 = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation"] }
+
+[dev-dependencies]
+tempfile = "3"

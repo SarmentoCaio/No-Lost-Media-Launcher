@@ -67,7 +67,7 @@ button:focus-visible, article:focus-visible, input:focus-visible, select:focus-v
 .primary-action:disabled { cursor: wait; filter: grayscale(.5); opacity: .65; }
 .primary-action--wide { width: 100%; margin-top: 21px; }
 .primary-action--stop { background: linear-gradient(135deg, #d94f5c, #a72d42); color: white; box-shadow: 0 10px 24px rgba(217,79,92,.2); }
-.dialog-secondary-action { width: 100%; margin-top: 9px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: #8f9caf; font-size: 9px; cursor: pointer; }
+.dialog-secondary-action { display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px; margin-top: 9px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: #8f9caf; font-size: 9px; cursor: pointer; }
 .dialog-secondary-action:hover { border-color: rgba(121,242,208,.26); color: var(--accent); }
 .dialog-secondary-action--danger { border-color: rgba(255,113,113,.22); color: #ff9b9b; }
 .dialog-secondary-action--danger:hover { border-color: rgba(255,113,113,.48); color: #ffd0d0; }
@@ -341,6 +341,20 @@ button:focus-visible, article:focus-visible, input:focus-visible, select:focus-v
 .game-facts small { color: var(--muted); font-size: 7px; letter-spacing: .5px; text-transform: uppercase; }
 .game-facts strong { margin-top: 5px; font-size: 10px; }
 .game-dialog__body .legal-note { margin-top: 10px; color: #5e6b7d; font-size: 8px; line-height: 1.5; text-align: center; }
+.removal-layer { z-index: 95; }
+.removal-dialog { width: min(570px, 96vw); padding: 24px; border: 1px solid rgba(255,113,113,.25); border-radius: 20px; background: radial-gradient(circle at 10% 0, rgba(255,113,113,.1), transparent 34%), #111824; box-shadow: 0 30px 90px rgba(0,0,0,.65); }
+.removal-dialog__icon { display: grid; width: 48px; height: 48px; margin-bottom: 16px; place-items: center; border: 1px solid rgba(255,113,113,.3); border-radius: 14px; background: rgba(255,113,113,.09); color: #ff9b9b; }
+.removal-dialog__icon svg { width: 21px; }
+.removal-dialog h2 { margin: 7px 0 9px; font: 700 23px/1.15 "Space Grotesk"; }
+.removal-dialog p { margin: 0; color: #9aa7ba; font-size: 10px; line-height: 1.6; }
+.removal-dialog .removal-dialog__note { margin-top: 9px; color: #68778d; font-size: 8px; }
+.removal-dialog__actions { display: grid; grid-template-columns: auto 1fr 1fr; gap: 8px; margin-top: 22px; }
+.removal-dialog__actions button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.025); color: #9ca9bb; font-size: 8px; font-weight: 750; cursor: pointer; }
+.removal-dialog__actions button:hover:not(:disabled) { background: rgba(255,255,255,.055); color: white; }
+.removal-dialog__actions .remove-keep-saves { border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.07); color: #f4ca80; }
+.removal-dialog__actions .remove-with-saves { border-color: rgba(255,113,113,.34); background: rgba(255,113,113,.11); color: #ffaaaa; }
+.removal-dialog__actions .remove-with-saves:hover:not(:disabled) { border-color: rgba(255,113,113,.58); background: rgba(255,113,113,.17); color: #ffd4d4; }
+.removal-dialog__actions button:disabled { cursor: wait; opacity: .55; }
 .toast-stack { position: fixed; z-index: 100; right: 22px; bottom: 22px; display: grid; width: min(380px, calc(100vw - 32px)); gap: 8px; }
 .toast { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border: 1px solid rgba(255,255,255,.12); border-radius: 11px; background: #182130; color: #dbe5f2; font-size: 10px; box-shadow: 0 14px 35px rgba(0,0,0,.35); animation: toast-in .22s ease; }
 .toast--success { border-color: rgba(121,242,208,.28); }
@@ -392,6 +406,8 @@ button:focus-visible, article:focus-visible, input:focus-visible, select:focus-v
   .game-dialog > .game-artwork { width: 100%; height: 180px; }
   .game-dialog__body { padding: 0; }
   .game-dialog__body h2 { font-size: 23px; }
+  .removal-dialog { padding: 20px; }
+  .removal-dialog__actions { grid-template-columns: 1fr; }
   .toast-stack { right: 16px; bottom: 82px; }
   .emulator-row { grid-template-columns: 38px 1fr; }
   .emulator-actions { grid-column: 1 / -1; align-items: stretch; }

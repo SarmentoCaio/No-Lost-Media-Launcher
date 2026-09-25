@@ -178,7 +178,8 @@ export class BrowserPreviewRuntime implements PlatformRuntime {
     await wait(250);
   }
 
-  async removeGame(gameId: string): Promise<void> {
-    saveLibrary(readLibrary().filter((item) => item.gameId !== gameId));
+  async removeGame(game: Game): Promise<{ gameFilesDeleted: boolean; saveFilesDeleted: number }> {
+    saveLibrary(readLibrary().filter((item) => item.gameId !== game.id));
+    return { gameFilesDeleted: false, saveFilesDeleted: 0 };
   }
 }

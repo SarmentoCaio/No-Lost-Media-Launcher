@@ -35,6 +35,12 @@ export interface InstalledGame {
   lastPlayedAt?: string;
   playTimeMinutes: number;
   localPath?: string;
+  managed?: boolean;
+}
+
+export interface RemoveGameResult {
+  gameFilesDeleted: boolean;
+  saveFilesDeleted: number;
 }
 
 export interface DownloadTask {
