@@ -1,0 +1,29 @@
+[package]
+name = "no-lost-media-launcher"
+version = "0.1.0"
+description = "No Lost Media Launcher desktop runtime"
+authors = ["No Lost Media"]
+edition = "2021"
+
+[lib]
+name = "no_lost_media_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+chrono = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sevenz-rust = "0.6.1"
+sha2 = "0.10"
+sha1 = "0.10"
+zip = { version = "6.0", default-features = false, features = ["deflate"] }
+fs2 = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation"] }
