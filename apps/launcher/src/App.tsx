@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   ArrowUpDown,
   Check,
@@ -44,6 +46,7 @@ type ViewId = "home" | "library" | "downloads" | "emulators" | "settings";
 type Toast = { id: number; message: string; tone: "info" | "success" | "error" };
 type EmulatorTask = EmulatorInstallProgress & { emulatorId: string };
 type CatalogSort = "title-asc" | "title-desc" | "size-desc" | "size-asc" | "year-desc" | "year-asc";
+type DesktopDeepLinkPayload = { url: string };
 
 const FAVORITES_STORAGE_KEY = "nolostmedia_favorites_v1";
 const GAME_DOWNLOADS_STORAGE_KEY = "nlm-launcher-game-downloads-v2";
@@ -73,6 +76,17 @@ const catalogSortOptions: { value: CatalogSort; label: string }[] = [
   { value: "year-desc", label: "Ano (mais recente)" },
   { value: "year-asc", label: "Ano (mais clássico)" },
 ];
+
+function gameIdFromDeepLink(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "nolostmedia:" || url.hostname !== "game") return null;
+    const gameId = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+    return gameId || null;
+  } catch {
+    return null;
+  }
+}
 
 function initialLetter(game: Game): string {
   const letter = game.title.trim().charAt(0).toLocaleUpperCase("pt-BR");
@@ -305,6 +319,7 @@ export function App() {
   const discardedDownloads = useRef(new Set<string>());
   const searchInputRef = useRef<HTMLInputElement>(null);
   const activeDownloadKeys = useRef(new Set<string>());
+  const pendingDeepLinkRequested = useRef(false);
   const [loading, setLoading] = useState(true);
   const [catalogSource, setCatalogSource] = useState<"remote" | "bundled" | "demo">("bundled");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -312,6 +327,7 @@ export function App() {
   const [advancedGraphics, setAdvancedGraphics] = useState(false);
   const [connectedControllers, setConnectedControllers] = useState(0);
   const [editingEmulator, setEditingEmulator] = useState<EmulatorSettings | null>(null);
+  const [desktopGameId, setDesktopGameId] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(query), 200);
@@ -342,6 +358,36 @@ export function App() {
     };
     window.addEventListener("keydown", handleSearchShortcut);
     return () => window.removeEventListener("keydown", handleSearchShortcut);
+  }, []);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    const receive = (value: string | null) => {
+      const gameId = value ? gameIdFromDeepLink(value) : null;
+      if (!disposed && gameId) setDesktopGameId(gameId);
+    };
+    void listen<DesktopDeepLinkPayload>("desktop-deep-link", (event) => receive(event.payload.url))
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else stopListening = unlisten;
+      });
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__ || pendingDeepLinkRequested.current) return;
+    pendingDeepLinkRequested.current = true;
+    void invoke<string | null>("take_pending_deep_link")
+      .then((value) => {
+        const gameId = value ? gameIdFromDeepLink(value) : null;
+        if (gameId) setDesktopGameId(gameId);
+      })
+      .catch(() => undefined);
   }, []);
 
   const notify = (message: string, tone: Toast["tone"] = "info") => {
@@ -612,6 +658,25 @@ export function App() {
       notify(readableError(error, "Não foi possível iniciar o jogo."), "error");
     }
   };
+
+  useEffect(() => {
+    if (!desktopGameId || loading || !runtimeInfo) return;
+    const game = games.find((candidate) => candidate.id === desktopGameId);
+    setDesktopGameId(null);
+    if (!game) {
+      notify("O jogo solicitado pelo site não foi encontrado neste catálogo.", "error");
+      return;
+    }
+    setView("home");
+    setSystem(game.system);
+    setSelectedGame(game);
+    if (installedById.has(game.id)) {
+      setSelectedGame(null);
+      void launchGame(game);
+    } else {
+      notify(`${game.title} foi aberto pelo site. Baixe-o para jogar no PC.`);
+    }
+  }, [desktopGameId, games, installedById, loading, runtimeInfo]);
 
   const configureLibrary = async () => {
     if (runtimeInfo?.mode !== "native") {

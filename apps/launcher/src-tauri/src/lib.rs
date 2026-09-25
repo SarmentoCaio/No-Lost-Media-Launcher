@@ -15,7 +15,7 @@ use std::{
         Arc, Mutex, OnceLock,
     },
 };
-use tauri::{ipc::Channel, Manager, State};
+use tauri::{ipc::Channel, Emitter, Manager, State};
 
 const SYSTEM_FOLDERS: &[&str] = &[
     "ps1",
@@ -227,6 +227,13 @@ struct AppConfig {
 struct AppState {
     data_dir: PathBuf,
     download_cancellations: Mutex<HashMap<String, Arc<DownloadCancellation>>>,
+    pending_deep_link: Mutex<Option<String>>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeepLinkPayload {
+    url: String,
 }
 
 pub(crate) struct DownloadCancellation {
@@ -264,6 +271,34 @@ impl AppState {
     fn library_index_path(&self) -> PathBuf {
         self.data_dir.join("library.json")
     }
+}
+
+fn deep_link_from_args(args: impl IntoIterator<Item = String>) -> Option<String> {
+    args.into_iter()
+        .find(|value| value.starts_with("nolostmedia://"))
+}
+
+fn deliver_deep_link(app: &tauri::AppHandle, url: String) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut pending) = state.pending_deep_link.lock() {
+            *pending = Some(url.clone());
+        }
+    }
+    let _ = app.emit("desktop-deep-link", DeepLinkPayload { url });
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+#[tauri::command]
+fn take_pending_deep_link(state: State<'_, AppState>) -> Option<String> {
+    state
+        .pending_deep_link
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.take())
 }
 
 const DOWNLOAD_CANCELLED: &str = "DOWNLOAD_CANCELLED";
@@ -2028,6 +2063,12 @@ fn remove_game(game_id: String, state: State<'_, AppState>) -> Result<(), String
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if let Some(url) = deep_link_from_args(args) {
+                deliver_deep_link(app, url);
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -2035,6 +2076,7 @@ pub fn run() {
             let state = AppState {
                 data_dir: data_dir.clone(),
                 download_cancellations: Mutex::new(HashMap::new()),
+                pending_deep_link: Mutex::new(deep_link_from_args(env::args())),
             };
             let mut config: AppConfig = read_json(&state.config_path());
             if config.library_path.is_none() {
@@ -2049,6 +2091,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             runtime_info,
+            take_pending_deep_link,
             save_settings,
             get_emulator_settings,
             save_emulator_settings,

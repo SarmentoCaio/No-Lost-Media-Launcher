@@ -27,9 +27,23 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["nolostmedia"]
+      }
+    }
+  },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "Launcher desktop oficial do No Lost Media",
+    "longDescription": "Baixe, organize, configure e execute o acervo do No Lost Media no PC.",
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installMode": "currentUser"
+      }
+    }
   }
 }
-
