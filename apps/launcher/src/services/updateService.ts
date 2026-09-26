@@ -2,7 +2,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 
-export const APP_VERSION = "0.1.2";
+export const APP_VERSION = "0.1.3";
 export const GITHUB_REPO = "SarmentoCaio/No-Lost-Media-Launcher";
 export const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases`;
 export const GITHUB_API_LATEST_RELEASE = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
