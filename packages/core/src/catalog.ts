@@ -73,6 +73,15 @@ export function normalizeCatalog(records: unknown): Game[] {
       sourceUrl = sourceUrl.replace("https://no-lost-media-bff.onrender.com", "https://api.nolost.media");
     }
 
+    const rawChecksum = typeof item.checksum === "string"
+      ? item.checksum
+      : typeof item.sha1 === "string"
+        ? item.sha1
+        : undefined;
+    const checksum = rawChecksum && /^[0-9a-fA-F]{40}$/.test(rawChecksum.trim())
+      ? rawChecksum.trim().toLowerCase()
+      : undefined;
+
     games.push({
       id: item.id,
       title: item.title,
@@ -83,7 +92,7 @@ export function normalizeCatalog(records: unknown): Game[] {
       coverUrl: typeof item.coverUrl === "string" ? item.coverUrl : undefined,
       fileSizeBytes: typeof item.fileSizeBytes === "number" ? item.fileSizeBytes : undefined,
       fileSizeLabel: typeof item.fileSize === "string" ? item.fileSize : undefined,
-      checksum: typeof item.checksum === "string" ? item.checksum : typeof item.sha1 === "string" ? item.sha1 : undefined,
+      checksum,
       sourceUrl,
       fileName: typeof item.fileName === "string" ? item.fileName : undefined,
     });

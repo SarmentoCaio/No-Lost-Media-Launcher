@@ -218,7 +218,17 @@ function formatEta(seconds?: number): string {
 }
 
 function isRetryableDownloadError(message: string): boolean {
-  const permanentErrors = ["Espaço insuficiente", "não pertence ao acervo", "nome de arquivo", "formato", "RAR", "BIOS", "DOWNLOAD_CANCELLED"];
+  const permanentErrors = [
+    "Espaço insuficiente",
+    "não pertence ao acervo",
+    "não corresponde ao registro do acervo",
+    "integridade",
+    "nome de arquivo",
+    "formato",
+    "RAR",
+    "BIOS",
+    "DOWNLOAD_CANCELLED",
+  ];
   return !permanentErrors.some((value) => message.includes(value));
 }
 

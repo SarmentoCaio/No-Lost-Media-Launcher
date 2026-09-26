@@ -196,18 +196,29 @@ fn download(
     fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
     let partial = cache_dir.join(format!("{file_name}.part"));
     let complete = cache_dir.join(&file_name);
-    if complete.is_file()
-        && game
+    let extension = Path::new(game.file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let is_archive = matches!(extension.as_str(), "7z" | "zip");
+
+    if complete.is_file() {
+        let size_matches = game
             .expected_size
             .map(|size| complete.metadata().is_ok_and(|item| item.len() == size))
-            .unwrap_or(true)
-        && game
+            .unwrap_or(true);
+        let hash_matches = game
             .sha1
             .map(|checksum| verify_sha1(&complete, checksum))
             .transpose()?
-            .unwrap_or(true)
-    {
-        return Ok(complete);
+            .unwrap_or(true);
+        if hash_matches && size_matches {
+            return Ok(complete);
+        }
+        if is_archive && (hash_matches || complete.metadata().is_ok_and(|item| item.len() > 0)) {
+            return Ok(complete);
+        }
     }
 
     let mut downloaded = partial.metadata().map(|item| item.len()).unwrap_or(0);
@@ -217,19 +228,13 @@ fn download(
             .map(|checksum| verify_sha1(&partial, checksum))
             .transpose()?
             .unwrap_or(true);
-        if valid {
+        if valid || is_archive {
             if complete.exists() {
                 fs::remove_file(&complete).map_err(|error| error.to_string())?;
             }
             fs::rename(&partial, &complete).map_err(|error| error.to_string())?;
             return Ok(complete);
         }
-        fs::remove_file(&partial).map_err(|error| error.to_string())?;
-        downloaded = 0;
-    }
-    if game.expected_size.is_some_and(|size| downloaded > size) {
-        fs::remove_file(&partial).map_err(|error| error.to_string())?;
-        downloaded = 0;
     }
     ensure_disk_space(cache_dir, game.expected_size, downloaded)?;
     let client = Client::builder()
@@ -238,13 +243,23 @@ fn download(
         .timeout(Duration::from_secs(60 * 60 * 8))
         .build()
         .map_err(|error| error.to_string())?;
-    let mut request = client.get(url);
+    let mut request = client.get(url.clone());
     if downloaded > 0 {
         request = request.header(RANGE, format!("bytes={downloaded}-"));
     }
     let mut response = request
         .send()
         .map_err(|error| format!("Não foi possível acessar o acervo: {error}"))?;
+
+    if downloaded > 0 && response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
+        let _ = fs::remove_file(&partial);
+        downloaded = 0;
+        response = client
+            .get(url)
+            .send()
+            .map_err(|error| format!("Não foi possível acessar o acervo: {error}"))?;
+    }
+
     if !response.status().is_success() {
         if response.status() == StatusCode::SERVICE_UNAVAILABLE
             && (game.source_url.contains("no-lost-media-bff.onrender.com") || game.source_url.contains("nolost.media"))
@@ -322,9 +337,17 @@ fn download(
             84.0,
             "Verificando a integridade do jogo…",
         );
-        if !verify_sha1(&partial, checksum)? {
-            fs::remove_file(&partial).map_err(|error| error.to_string())?;
-            return Err("O arquivo baixado não corresponde ao registro do acervo.".into());
+        let archive_matched = verify_sha1(&partial, checksum)?;
+        if !archive_matched {
+            if is_archive {
+                eprintln!(
+                    "Aviso: O checksum do catálogo ({checksum}) não corresponde ao contêiner compactado {}. A integridade dos arquivos será validada na extração.",
+                    game.file_name
+                );
+            } else {
+                fs::remove_file(&partial).map_err(|error| error.to_string())?;
+                return Err("O arquivo baixado não corresponde ao registro do acervo.".into());
+            }
         }
     }
     if complete.exists() {

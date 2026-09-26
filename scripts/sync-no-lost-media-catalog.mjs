@@ -39,6 +39,24 @@ const systemByPlatform = {
 };
 const authenticatedPlatforms = new Set(["PS2", "PS3", "PC", "OUTROS"]);
 
+const ps2ArchiveDataPath = resolve(root, "scripts", "data", "ps2-archive-files.json");
+let ps2ArchiveData = {};
+if (existsSync(ps2ArchiveDataPath)) {
+  try {
+    ps2ArchiveData = JSON.parse(await readFile(ps2ArchiveDataPath, "utf8"));
+  } catch (err) {
+    console.warn("Aviso: Falha ao ler ps2-archive-files.json:", err.message);
+  }
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return undefined;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function defaultCollection(game) {
   if (game.archiveCollection) return game.archiveCollection;
   const letter = (game.initialLetter || "#").toUpperCase();
@@ -81,6 +99,26 @@ const games = sourceGames.flatMap((game) => {
   const system = systemByPlatform[game.platform];
   if (!system || !game.rawFileName || !game.id || !game.title) return [];
   const fileName = game.rawFileName.split("/").filter(Boolean).at(-1);
+
+  let fileSizeBytes = game.fileSizeBytes;
+  let fileSizeLabel = game.fileSize;
+  let checksum = typeof game.sha1 === "string" && /^[0-9a-fA-F]{40}$/.test(game.sha1.trim())
+    ? game.sha1.trim().toLowerCase()
+    : undefined;
+
+  if (game.platform === "PS2") {
+    const archiveInfo = ps2ArchiveData[fileName] || ps2ArchiveData[game.rawFileName];
+    if (archiveInfo) {
+      fileSizeBytes = archiveInfo.size;
+      fileSizeLabel = formatBytes(archiveInfo.size) || game.fileSize;
+      checksum = archiveInfo.sha1.toLowerCase();
+    } else {
+      // Se não houver correspondência exata no acervo, o sha1 original do games.json
+      // é um hash de track de disco Redump (ou marcador texto) e não do arquivo .7z baixado.
+      checksum = undefined;
+    }
+  }
+
   return [{
     id: game.id,
     title: game.title,
@@ -89,11 +127,11 @@ const games = sourceGames.flatMap((game) => {
     genre: game.genre,
     region: game.region,
     coverUrl: game.coverUrl,
-    fileSizeBytes: game.fileSizeBytes,
-    fileSizeLabel: game.fileSize,
+    fileSizeBytes,
+    fileSizeLabel,
     sourceUrl: sourceUrl(game),
     fileName,
-    checksum: game.sha1 || undefined,
+    checksum,
   }];
 });
 
