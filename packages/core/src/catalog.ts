@@ -18,6 +18,7 @@ interface CatalogRecord {
   id?: unknown;
   title?: unknown;
   platform?: unknown;
+  system?: unknown;
   year?: unknown;
   genre?: unknown;
   region?: unknown;
@@ -25,17 +26,53 @@ interface CatalogRecord {
   fileSize?: unknown;
   fileSizeBytes?: unknown;
   sha1?: unknown;
+  checksum?: unknown;
   sourceUrl?: unknown;
   fileName?: unknown;
 }
 
 export function normalizeCatalog(records: unknown): Game[] {
-  if (!Array.isArray(records)) return [];
+  let list: unknown[] = [];
+  if (Array.isArray(records)) {
+    list = records;
+  } else if (records && typeof records === "object" && "games" in records && Array.isArray((records as { games: unknown }).games)) {
+    list = (records as { games: unknown[] }).games;
+  } else {
+    return [];
+  }
+
   const games: Game[] = [];
-  for (const item of records as CatalogRecord[]) {
-    if (typeof item.id !== "string" || typeof item.title !== "string" || typeof item.platform !== "string") continue;
-    const system = platformMap[item.platform.toUpperCase()];
+  for (const item of list as CatalogRecord[]) {
+    if (typeof item.id !== "string" || typeof item.title !== "string") continue;
+    let system: Exclude<SystemId, "all"> | undefined;
+    if (typeof item.system === "string") {
+      const sys = item.system.toLowerCase();
+      if (
+        sys === "ps1" ||
+        sys === "ps2" ||
+        sys === "ps3" ||
+        sys === "dreamcast" ||
+        sys === "n64" ||
+        sys === "snes" ||
+        sys === "nes" ||
+        sys === "gba" ||
+        sys === "gamecube" ||
+        sys === "wii" ||
+        sys === "pc"
+      ) {
+        system = sys;
+      }
+    }
+    if (!system && typeof item.platform === "string") {
+      system = platformMap[item.platform.toUpperCase()];
+    }
     if (!system) continue;
+
+    let sourceUrl = typeof item.sourceUrl === "string" ? item.sourceUrl : undefined;
+    if (sourceUrl && sourceUrl.includes("no-lost-media-bff.onrender.com")) {
+      sourceUrl = sourceUrl.replace("https://no-lost-media-bff.onrender.com", "https://api.nolost.media");
+    }
+
     games.push({
       id: item.id,
       title: item.title,
@@ -46,8 +83,8 @@ export function normalizeCatalog(records: unknown): Game[] {
       coverUrl: typeof item.coverUrl === "string" ? item.coverUrl : undefined,
       fileSizeBytes: typeof item.fileSizeBytes === "number" ? item.fileSizeBytes : undefined,
       fileSizeLabel: typeof item.fileSize === "string" ? item.fileSize : undefined,
-      checksum: typeof item.sha1 === "string" ? item.sha1 : undefined,
-      sourceUrl: typeof item.sourceUrl === "string" ? item.sourceUrl : undefined,
+      checksum: typeof item.checksum === "string" ? item.checksum : typeof item.sha1 === "string" ? item.sha1 : undefined,
+      sourceUrl,
       fileName: typeof item.fileName === "string" ? item.fileName : undefined,
     });
   }

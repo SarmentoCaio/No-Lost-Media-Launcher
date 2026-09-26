@@ -11,8 +11,8 @@ async function loadBundledCatalog(): Promise<Game[]> {
   try {
     const response = await fetch("./catalog/no-lost-media.json");
     if (!response.ok) return [];
-    const payload = await response.json() as { games?: Game[] };
-    return Array.isArray(payload.games) ? payload.games : [];
+    const payload = await response.json();
+    return normalizeCatalog(payload);
   } catch {
     return [];
   }

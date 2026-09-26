@@ -3,31 +3,47 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   ArrowUpDown,
+  Car,
   Check,
   ChevronRight,
+  Compass,
+  Cpu,
   Download,
+  ExternalLink,
+  Flame,
   Gamepad2,
   Gauge,
+  Ghost,
+  Globe,
   HardDrive,
   Heart,
   Home,
   Image as ImageIcon,
+  Info,
+  LayoutGrid,
   Library,
+  List,
   Menu,
   MonitorCog,
+  Music,
   Play,
+  Puzzle,
+  RefreshCw,
   Search,
   Settings,
+  Shield,
   SlidersHorizontal,
   Sparkles,
+  Swords,
+  Target,
   Trash2,
+  Trophy,
   Volume2,
   X,
 } from "lucide-react";
 import {
   getSystem,
   searchGames,
-  systems,
   type DownloadTask,
   type EmulatorInstallProgress,
   type EmulatorSettings,
@@ -42,6 +58,17 @@ import {
 import { createRuntime } from "./runtime";
 import { loadCatalog } from "./services/catalogService";
 import { EmulatorSettingsDialog } from "./components/EmulatorSettingsDialog";
+import { ConsoleTabs } from "./components/ConsoleTabs";
+import { CustomDropdown } from "./components/CustomDropdown";
+import { UpdateModal } from "./components/UpdateModal";
+import {
+  checkForUpdates,
+  openExternalUrl,
+  APP_VERSION,
+  GITHUB_REPO,
+  UPDATE_DISMISSED_SESSION_KEY,
+  type AppRelease,
+} from "./services/updateService";
 
 type ViewId = "home" | "library" | "downloads" | "emulators" | "settings";
 type Toast = { id: number; message: string; tone: "info" | "success" | "error" };
@@ -69,13 +96,51 @@ const catalogGenres = [
   "Estratégia & Simulação",
   "Puzzle / Tabuleiro",
 ] as const;
+
+interface GenreMeta {
+  shortLabel: string;
+  icon: typeof Gamepad2;
+}
+
+const GENRE_META: Record<string, GenreMeta> = {
+  "ALL": { shortLabel: "Todos", icon: Compass },
+  "Ação & Aventura": { shortLabel: "Ação", icon: Swords },
+  "RPG": { shortLabel: "RPG", icon: Shield },
+  "Terror / Horror": { shortLabel: "Terror", icon: Ghost },
+  "Corrida": { shortLabel: "Corrida", icon: Car },
+  "Luta": { shortLabel: "Luta", icon: Flame },
+  "Tiro / Shooter": { shortLabel: "Tiro", icon: Target },
+  "Esportes": { shortLabel: "Esportes", icon: Trophy },
+  "Plataforma / Aventura": { shortLabel: "Plataforma", icon: Gamepad2 },
+  "Música & Ritmo": { shortLabel: "Música", icon: Music },
+  "Estratégia & Simulação": { shortLabel: "Estratégia", icon: Cpu },
+  "Puzzle / Tabuleiro": { shortLabel: "Puzzle", icon: Puzzle },
+};
+
+function getSystemDiscType(systemId: string): string | null {
+  switch (systemId) {
+    case "ps1": return "CD-ROM";
+    case "ps2": return "DVD-ROM";
+    case "ps3": return "BLU-RAY DISC";
+    case "dreamcast": return "GD-ROM";
+    case "gamecube": return "MINI-DVD";
+    case "wii": return "DVD-ROM";
+    case "pc": return "WIN/DOS";
+    case "n64": return "64-BIT";
+    case "snes": return "16-BIT";
+    case "gba": return "32-BIT";
+    case "nes": return "8-BIT";
+    default: return null;
+  }
+}
+
 const catalogSortOptions: { value: CatalogSort; label: string }[] = [
-  { value: "title-asc", label: "Título (A–Z)" },
-  { value: "title-desc", label: "Título (Z–A)" },
-  { value: "size-desc", label: "Tamanho (maior)" },
-  { value: "size-asc", label: "Tamanho (menor)" },
-  { value: "year-desc", label: "Ano (mais recente)" },
-  { value: "year-asc", label: "Ano (mais clássico)" },
+  { value: "title-asc", label: "Ordem Alfabética (A → Z)" },
+  { value: "title-desc", label: "Ordem Alfabética (Z → A)" },
+  { value: "year-desc", label: "Ano (Mais recente)" },
+  { value: "year-asc", label: "Ano (Mais clássico)" },
+  { value: "size-desc", label: "Tamanho (Maior)" },
+  { value: "size-asc", label: "Tamanho (Menor)" },
 ];
 
 function gameIdFromDeepLink(value: string): string | null {
@@ -204,17 +269,43 @@ function readableError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function GameArtwork({ game, compact = false, onCoverError, coverAvailable = true }: { game: Game; compact?: boolean; onCoverError?: () => void; coverAvailable?: boolean }) {
+function GameArtwork({
+  game,
+  compact = false,
+  onCoverError,
+  coverAvailable = true,
+  showBadges = false,
+}: {
+  game: Game;
+  compact?: boolean;
+  onCoverError?: () => void;
+  coverAvailable?: boolean;
+  showBadges?: boolean;
+}) {
   const system = getSystem(game.system);
   const initials = game.title.split(/\s+/).slice(0, 2).map((word) => word[0]).join("");
+  const discType = getSystemDiscType(game.system);
+
   return (
     <div className={`game-artwork ${compact ? "game-artwork--compact" : ""}`} style={{ "--game-accent": system.accent } as React.CSSProperties}>
-      {game.coverUrl && coverAvailable ? <img src={game.coverUrl} alt="" loading="lazy" onError={onCoverError} /> : (
+      {game.coverUrl && coverAvailable ? (
+        <img src={game.coverUrl} alt="" loading="lazy" onError={onCoverError} />
+      ) : (
         <>
           <span className="game-artwork__system">{system.shortName}</span>
           <strong>{initials}</strong>
           <i aria-hidden="true" />
         </>
+      )}
+
+      {showBadges && (
+        <div className="game-artwork__badges-overlay">
+          <div className="game-artwork__badges-left">
+            <span className="cover-badge cover-badge--system">{system.shortName}</span>
+            {discType && <span className="cover-badge cover-badge--disc">{discType}</span>}
+          </div>
+          {game.year && <span className="cover-badge cover-badge--year">{game.year}</span>}
+        </div>
       )}
     </div>
   );
@@ -249,31 +340,205 @@ function GameCard({
 }) {
   const system = getSystem(game.system);
   const busy = isDownloadActive(task?.state);
+  const sizeText = game.fileSizeLabel || (game.fileSizeBytes ? formatBytes(game.fileSizeBytes) : null);
+  const secondaryTitle = game.fileName || (game.region ? `Região: ${game.region}` : null);
+
   return (
-    <article className="game-card" tabIndex={0} onClick={onSelect} onKeyDown={(event) => {
-      if (event.key === "Enter") onSelect();
-    }}>
-      <GameArtwork game={game} onCoverError={onCoverError} coverAvailable={coverAvailable} />
-      <button className={`favorite-button ${favorite ? "is-active" : ""}`} type="button" aria-label={favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"} onClick={(event) => { event.stopPropagation(); onToggleFavorite(); }}><Heart size={15} fill={favorite ? "currentColor" : "none"} /></button>
+    <article
+      className="game-card"
+      style={{ "--card-accent": system.accent } as React.CSSProperties}
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onSelect();
+      }}
+    >
+      <div className="game-card__media">
+        <GameArtwork
+          game={game}
+          onCoverError={onCoverError}
+          coverAvailable={coverAvailable}
+          showBadges
+        />
+        <button
+          className={`favorite-button ${favorite ? "is-active" : ""}`}
+          type="button"
+          aria-label={favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleFavorite();
+          }}
+        >
+          <Heart size={14} fill={favorite ? "currentColor" : "none"} />
+        </button>
+      </div>
+
       <div className="game-card__body">
-        <span className="system-chip" style={{ "--chip-accent": system.accent } as React.CSSProperties}>{system.shortName}</span>
         <h3 title={game.title}>{game.title}</h3>
-        <p>{[game.year, game.genre].filter(Boolean).join(" • ")}</p>
+        {secondaryTitle ? (
+          <p className="game-card__sub" title={secondaryTitle}>{secondaryTitle}</p>
+        ) : (
+          <p className="game-card__sub">{[game.year, game.genre].filter(Boolean).join(" • ")}</p>
+        )}
+
+        <div className="game-card__chips">
+          {sizeText && (
+            <span className="game-card__chip-size">
+              <HardDrive size={11} /> {sizeText}
+            </span>
+          )}
+          {game.genre && (
+            <span className="game-card__chip-genre" title={game.genre}>
+              {game.genre}
+            </span>
+          )}
+        </div>
+
         {task && task.state !== "error" && (
           <div className="card-progress" aria-label={task.message}>
             <span style={{ width: `${task.progress}%` }} />
           </div>
         )}
-        <button className={installed ? "card-action card-action--play" : busy ? "card-action card-action--stop" : "card-action"} type="button" disabled={stopping} onClick={(event) => {
-          event.stopPropagation();
-          if (busy) onCancel();
-          else onPrimary();
-        }}>
-          {installed ? <Play size={15} fill="currentColor" /> : busy ? <X size={15} /> : <Download size={15} />}
-          {installed ? "Jogar" : busy ? stopping ? "Parando…" : "Parar" : task?.state === "paused" ? "Continuar" : game.sourceUrl ? "Baixar" : nativeMode ? "Adicionar" : "Instalar"}
+
+        <button
+          className={installed ? "card-action card-action--play" : busy ? "card-action card-action--stop" : "card-action"}
+          type="button"
+          disabled={stopping}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (busy) onCancel();
+            else onPrimary();
+          }}
+        >
+          {installed ? <Play size={14} fill="currentColor" /> : busy ? <X size={14} /> : <Download size={14} />}
+          <span>
+            {installed
+              ? "Jogar"
+              : busy
+              ? stopping
+                ? "Parando…"
+                : `Baixando (${Math.floor(task?.progress ?? 0)}%)`
+              : task?.state === "paused"
+              ? "Continuar"
+              : game.sourceUrl
+              ? "Baixar"
+              : nativeMode
+              ? "Adicionar"
+              : "Instalar"}
+          </span>
         </button>
       </div>
     </article>
+  );
+}
+
+function GameListRow({
+  game,
+  installed,
+  task,
+  nativeMode,
+  onSelect,
+  onPrimary,
+  onCancel,
+  stopping,
+  favorite,
+  onToggleFavorite,
+  onCoverError,
+  coverAvailable,
+}: {
+  game: Game;
+  installed?: InstalledGame;
+  task?: DownloadTask;
+  nativeMode: boolean;
+  onSelect: () => void;
+  onPrimary: () => void;
+  onCancel: () => void;
+  stopping: boolean;
+  favorite: boolean;
+  onToggleFavorite: () => void;
+  onCoverError: () => void;
+  coverAvailable: boolean;
+}) {
+  const system = getSystem(game.system);
+  const busy = isDownloadActive(task?.state);
+  const sizeText = game.fileSizeLabel || (game.fileSizeBytes ? formatBytes(game.fileSizeBytes) : "—");
+
+  return (
+    <div
+      className="game-list-row"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onSelect();
+      }}
+    >
+      <div className="col-fav" onClick={(event) => event.stopPropagation()}>
+        <button
+          className={`favorite-button favorite-button--inline ${favorite ? "is-active" : ""}`}
+          type="button"
+          aria-label={favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+          onClick={onToggleFavorite}
+        >
+          <Heart size={14} fill={favorite ? "currentColor" : "none"} />
+        </button>
+      </div>
+
+      <div className="col-cover">
+        <div className="game-artwork game-artwork--mini" style={{ "--game-accent": system.accent } as React.CSSProperties}>
+          {game.coverUrl && coverAvailable ? (
+            <img src={game.coverUrl} alt="" loading="lazy" onError={onCoverError} />
+          ) : (
+            <span className="game-artwork__mini-initials">
+              {game.title.slice(0, 2).toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="col-title">
+        <strong title={game.title}>{game.title}</strong>
+        {task && task.state !== "error" && (
+          <div className="list-progress" aria-label={task.message}>
+            <span style={{ width: `${task.progress}%` }} />
+          </div>
+        )}
+      </div>
+
+      <div className="col-system">
+        <span className="system-chip" style={{ "--chip-accent": system.accent } as React.CSSProperties}>
+          {system.shortName}
+        </span>
+      </div>
+
+      <div className="col-genre" title={game.genre ?? ""}>
+        <span>{game.genre ?? "—"}</span>
+      </div>
+
+      <div className="col-year">
+        <span>{game.year ?? "—"}</span>
+      </div>
+
+      <div className="col-size">
+        <span>{sizeText}</span>
+      </div>
+
+      <div className="col-action" onClick={(event) => event.stopPropagation()}>
+        <button
+          className={installed ? "list-action list-action--play" : busy ? "list-action list-action--stop" : "list-action"}
+          type="button"
+          disabled={stopping}
+          onClick={() => {
+            if (busy) onCancel();
+            else onPrimary();
+          }}
+        >
+          {installed ? <Play size={13} fill="currentColor" /> : busy ? <X size={13} /> : <Download size={13} />}
+          <span>
+            {installed ? "Jogar" : busy ? (stopping ? "Parando…" : "Parar") : task?.state === "paused" ? "Continuar" : game.sourceUrl ? "Baixar" : nativeMode ? "Adicionar" : "Instalar"}
+          </span>
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -331,6 +596,90 @@ export function App() {
   const [connectedControllers, setConnectedControllers] = useState(0);
   const [editingEmulator, setEditingEmulator] = useState<EmulatorSettings | null>(null);
   const [desktopGameId, setDesktopGameId] = useState<string | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<AppRelease | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
+  const [displayMode, setDisplayMode] = useState<"grid" | "list">(() => {
+    try {
+      const saved = localStorage.getItem("nlm_display_mode");
+      return saved === "list" ? "list" : "grid";
+    } catch {
+      return "grid";
+    }
+  });
+
+  const handleSetDisplayMode = (mode: "grid" | "list") => {
+    setDisplayMode(mode);
+    try {
+      localStorage.setItem("nlm_display_mode", mode);
+    } catch {}
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    const checkInitialUpdate = async () => {
+      const result = await checkForUpdates(APP_VERSION);
+      if (!mounted) return;
+      if (result.hasUpdate && result.release) {
+        setAvailableUpdate(result.release);
+        const dismissed = sessionStorage.getItem(UPDATE_DISMISSED_SESSION_KEY);
+        if (dismissed !== result.release.tagName) {
+          setShowUpdateModal(true);
+        }
+      }
+    };
+    const timer = window.setTimeout(checkInitialUpdate, 1500);
+    return () => {
+      mounted = false;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const handleManualCheckUpdates = async () => {
+    setIsCheckingUpdate(true);
+    setUpdateStatusMessage("Consultando GitHub...");
+    const result = await checkForUpdates(APP_VERSION);
+    setIsCheckingUpdate(false);
+
+    if (result.error) {
+      setUpdateStatusMessage(`Não foi possível verificar: ${result.error}`);
+      notify("Não foi possível verificar atualizações no momento.", "error");
+      return;
+    }
+
+    if (result.hasUpdate && result.release) {
+      setAvailableUpdate(result.release);
+      setShowUpdateModal(true);
+      setUpdateStatusMessage(`Nova versão disponível: ${result.release.tagName}`);
+      notify(`Nova versão ${result.release.tagName} disponível!`, "success");
+    } else {
+      setUpdateStatusMessage("Você já está na versão mais recente.");
+      notify(`Você já está na versão mais recente (v${APP_VERSION}).`, "success");
+    }
+  };
+
+  const handleRemindLater = () => {
+    if (availableUpdate) {
+      sessionStorage.setItem(UPDATE_DISMISSED_SESSION_KEY, availableUpdate.tagName);
+    }
+    setShowUpdateModal(false);
+  };
+
+  const handleUpdateNow = async () => {
+    if (!availableUpdate) return;
+    setIsInstallingUpdate(true);
+    notify("Iniciando download da atualização...", "info");
+    const targetUrl = availableUpdate.setupAsset?.browserDownloadUrl || availableUpdate.htmlUrl;
+    try {
+      await openExternalUrl(targetUrl);
+    } catch {
+      window.open(targetUrl, "_blank");
+    }
+    setIsInstallingUpdate(false);
+    setShowUpdateModal(false);
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(query), 200);
@@ -484,11 +833,22 @@ export function App() {
   }, [totalCatalogPages]);
   const activeTasks = Object.values(tasks).filter((task) => isDownloadActive(task.state));
   const activeEmulatorTasks = Object.values(emulatorTasks).filter((task) => isDownloadActive(task.state));
-  const continueGame = visibleInstalled
-    .slice()
-    .sort((left, right) => (right.lastPlayedAt ?? "").localeCompare(left.lastPlayedAt ?? ""))
-    .map((entry) => games.find((game) => game.id === entry.gameId))
-    .find(Boolean);
+  const continueGame = useMemo(() => {
+    const sorted = visibleInstalled
+      .slice()
+      .sort((left, right) => (right.lastPlayedAt ?? "").localeCompare(left.lastPlayedAt ?? ""));
+
+    if (system !== "all") {
+      const matching = sorted
+        .map((entry) => games.find((game) => game.id === entry.gameId))
+        .find((game) => game && game.system === system);
+      if (matching) return matching;
+    }
+
+    return sorted
+      .map((entry) => games.find((game) => game.id === entry.gameId))
+      .find(Boolean);
+  }, [games, system, visibleInstalled]);
 
   const navigate = (nextView: ViewId) => {
     setView(nextView);
@@ -649,8 +1009,24 @@ export function App() {
       notify("Prévia da interface: a execução nativa será habilitada no aplicativo desktop.");
       return;
     }
+    if (game.system === "pc") {
+      try {
+        await runtime.launchGame(game);
+      } catch (error) {
+        notify(readableError(error, "Não foi possível iniciar o jogo de PC."), "error");
+      }
+      return;
+    }
     const compatibleEmulator = runtimeInfo.emulators.find((emulator) => emulator.systems.includes(game.system));
     if (!compatibleEmulator?.installed) {
+      if (game.system === "ps3") {
+        try {
+          await runtime.launchGame(game);
+        } catch (error) {
+          notify(readableError(error, "O jogo foi aberto na pasta local. Configure o RPCS3 para executá-lo diretamente."), "info");
+        }
+        return;
+      }
       notify(`${compatibleEmulator?.name ?? "O emulador deste sistema"} precisa ser instalado antes de iniciar ${game.title}.`, "error");
       navigate("emulators");
       return;
@@ -1027,21 +1403,25 @@ export function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu"><Menu /></button>
+          <div className="topbar__left">
+            <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu"><Menu /></button>
+          </div>
           <div className="search-box">
             <Search size={19} />
             <input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar títulos, arquivos, regiões ou gêneros…" />
             {query && <button onClick={() => setQuery("")} aria-label="Limpar busca"><X size={16} /></button>}
             {!query && <kbd>Ctrl+K</kbd>}
           </div>
-          <div className="topbar__mode">
-            {runtimeInfo?.capabilities.platform === "browser" ? <MonitorCog size={18} /> : <Gamepad2 size={18} />}
-            <span>{catalogSource === "demo" ? "Modo demonstração" : catalogSource === "remote" ? "Acervo conectado" : "Acervo No Lost Media"}</span>
+          <div className="topbar__right">
+            <div className="topbar__mode">
+              {runtimeInfo?.capabilities.platform === "browser" ? <MonitorCog size={18} /> : <Gamepad2 size={18} />}
+              <span>{catalogSource === "demo" ? "Modo demonstração" : catalogSource === "remote" ? "Acervo conectado" : "Acervo No Lost Media"}</span>
+            </div>
           </div>
         </header>
 
         <div className="content-scroll">
-          {view === "home" && !hasCatalogFilters && system === "all" && continueGame && (
+          {view === "home" && !hasCatalogFilters && continueGame && (
             <section className="hero-panel" style={{ "--hero-accent": getSystem(continueGame.system).accent } as React.CSSProperties}>
               <div className="hero-panel__glow" />
               <div className="hero-panel__copy">
@@ -1056,37 +1436,147 @@ export function App() {
 
           {(view === "home" || view === "library") && (
             <>
-              <section className="systems-row" aria-label="Sistemas">
-                {systems.map((item) => (
-                  <button key={item.id} className={system === item.id ? "is-active" : ""} style={{ "--system-accent": item.accent } as React.CSSProperties} onClick={() => { setSystem(item.id); setSelectedLetter("ALL"); }}>
-                    <span>{item.shortName}</span><small>{item.name} • {(systemCounts.get(item.id) ?? 0).toLocaleString("pt-BR")}</small>
-                  </button>
-                ))}
-              </section>
+              <ConsoleTabs
+                selectedSystem={system}
+                onSelectSystem={(nextSystem) => {
+                  setSystem(nextSystem);
+                  setSelectedLetter("ALL");
+                }}
+                systemCounts={systemCounts}
+              />
 
-              <section className="catalog-filters" aria-label="Filtros do catálogo">
-                <div className="alphabet-filter" aria-label="Filtrar por letra">
+              {/* Filtro Alfabético (Barra flutuante inspirada no site) */}
+              <div className="alphabet-bar-container" aria-label="Filtro alfabético">
+                <div className="alphabet-bar">
                   {catalogLetters.map((letter) => {
                     const count = letter === "ALL" ? letterTotal : (letterCounts[letter] ?? 0);
-                    return <button key={letter} type="button" disabled={count === 0} className={selectedLetter === letter ? "is-active" : ""} title={letter === "ALL" ? `${count} jogos` : `${count} jogos com a letra ${letter}`} onClick={() => setSelectedLetter(letter)}>{letter === "ALL" ? "Todos (A–Z)" : letter}</button>;
+                    return (
+                      <button
+                        key={letter}
+                        type="button"
+                        disabled={count === 0}
+                        className={`alphabet-pill ${selectedLetter === letter ? "is-active" : ""}`}
+                        title={letter === "ALL" ? `${count} jogos` : `${count} jogos com a letra ${letter}`}
+                        onClick={() => setSelectedLetter(letter)}
+                      >
+                        {letter === "ALL" ? "Todos (A–Z)" : letter}
+                      </button>
+                    );
                   })}
                 </div>
+              </div>
 
-                <div className="catalog-filter-toolbar">
-                  <button type="button" className={`filter-toggle ${onlyWithCovers ? "is-active" : ""}`} onClick={() => setOnlyWithCovers((current) => !current)}><ImageIcon size={15} /> Apenas com capas <i aria-hidden="true"><span /></i></button>
-                  <button type="button" className={`filter-toggle ${onlyFavorites ? "is-favorite" : ""}`} onClick={() => setOnlyFavorites((current) => !current)}><Heart size={15} fill={onlyFavorites ? "currentColor" : "none"} /> Favoritos ({favorites.size})</button>
-                  <label className="sort-select"><ArrowUpDown size={15} /><select value={catalogSort} onChange={(event) => setCatalogSort(event.target.value as CatalogSort)} aria-label="Ordenar resultados">{catalogSortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              {/* Barra de Ações & Opções de Visualização */}
+              <div className="catalog-toolbar">
+                <div className="catalog-toolbar__left">
+                  <button
+                    type="button"
+                    className={`filter-toggle ${onlyWithCovers ? "is-active" : ""}`}
+                    onClick={() => setOnlyWithCovers((current) => !current)}
+                  >
+                    <ImageIcon size={15} />
+                    <span>Apenas com capas</span>
+                    <i className="toggle-switch" aria-hidden="true"><span /></i>
+                  </button>
+                  <button
+                    type="button"
+                    className={`filter-toggle ${onlyFavorites ? "is-favorite" : ""}`}
+                    onClick={() => setOnlyFavorites((current) => !current)}
+                  >
+                    <Heart size={15} fill={onlyFavorites ? "currentColor" : "none"} />
+                    <span>Favoritos ({favorites.size})</span>
+                  </button>
                 </div>
 
-                <div className="genre-filter" aria-label="Filtrar por gênero">
-                  {catalogGenres.map((genre) => <button key={genre} type="button" className={selectedGenre === genre ? "is-active" : ""} onClick={() => setSelectedGenre(genre)}>{genre === "ALL" ? "Todos" : genre}</button>)}
+                <div className="catalog-toolbar__right">
+                  <div className="view-mode-group" role="group" aria-label="Modo de exibição">
+                    <button
+                      type="button"
+                      className={`view-mode-btn ${displayMode === "grid" ? "is-active" : ""}`}
+                      onClick={() => handleSetDisplayMode("grid")}
+                      title="Visualização em Grade"
+                      aria-label="Visualização em Grade"
+                    >
+                      <LayoutGrid size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`view-mode-btn ${displayMode === "list" ? "is-active" : ""}`}
+                      onClick={() => handleSetDisplayMode("list")}
+                      title="Visualização em Lista"
+                      aria-label="Visualização em Lista"
+                    >
+                      <List size={16} />
+                    </button>
+                  </div>
+                  <CustomDropdown
+                    value={catalogSort}
+                    onChange={(val) => setCatalogSort(val as CatalogSort)}
+                    options={catalogSortOptions}
+                    title="Ordem de exibição"
+                    icon={<ArrowUpDown size={14} />}
+                    ariaLabel="Ordenar resultados"
+                  />
+                </div>
+              </div>
+
+              {/* Filtro de Categorias / Gêneros (Pills elegantes com ícones) */}
+              <div className="genre-bar-container" aria-label="Filtro por gênero">
+                <div className="genre-bar">
+                  {catalogGenres.map((genre) => {
+                    const meta = GENRE_META[genre] ?? { shortLabel: genre, icon: Gamepad2 };
+                    const Icon = meta.icon;
+                    const isActive = selectedGenre === genre;
+                    return (
+                      <button
+                        key={genre}
+                        type="button"
+                        className={`genre-pill ${isActive ? "is-active" : ""}`}
+                        onClick={() => setSelectedGenre(genre)}
+                      >
+                        <Icon size={14} />
+                        <span>{meta.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Resumo de Status & Filtros Ativos */}
+              <div className="catalog-status-bar">
+                <div className="catalog-status-bar__info">
+                  <span className="live-status-dot" />
+                  <span>
+                    <strong>{filteredGames.length.toLocaleString("pt-BR")}</strong> de{" "}
+                    {games.length.toLocaleString("pt-BR")} títulos{" "}
+                    {onlyWithCovers && !debouncedSearch.trim() && <em>(apenas com capa)</em>}
+                    {debouncedSearch.trim() && <em>• busca por "{debouncedSearch}"</em>}
+                  </span>
                 </div>
 
-                <div className="filter-summary">
-                  <span><i /> <strong>{filteredGames.length.toLocaleString("pt-BR")}</strong> de {games.length.toLocaleString("pt-BR")} títulos {onlyWithCovers && !debouncedSearch.trim() && <em>• apenas com capa</em>} {debouncedSearch.trim() && <em>• busca global</em>}</span>
-                  {hasCatalogFilters && <div>{selectedLetter !== "ALL" && <button onClick={() => setSelectedLetter("ALL")}>Letra: {selectedLetter} <X size={11} /></button>}{selectedGenre !== "ALL" && <button onClick={() => setSelectedGenre("ALL")}>Gênero: {selectedGenre} <X size={11} /></button>}{onlyFavorites && <button onClick={() => setOnlyFavorites(false)}>Favoritos <X size={11} /></button>}<button className="clear-filters" onClick={resetCatalogFilters}>Limpar tudo</button></div>}
-                </div>
-              </section>
+                {hasCatalogFilters && (
+                  <div className="active-filters-chips">
+                    {selectedLetter !== "ALL" && (
+                      <button onClick={() => setSelectedLetter("ALL")}>
+                        Letra: {selectedLetter} <X size={12} />
+                      </button>
+                    )}
+                    {selectedGenre !== "ALL" && (
+                      <button onClick={() => setSelectedGenre("ALL")}>
+                        {GENRE_META[selectedGenre]?.shortLabel ?? selectedGenre} <X size={12} />
+                      </button>
+                    )}
+                    {onlyFavorites && (
+                      <button onClick={() => setOnlyFavorites(false)}>
+                        Favoritos <X size={12} />
+                      </button>
+                    )}
+                    <button className="clear-all-filters" onClick={resetCatalogFilters}>
+                      Limpar filtros
+                    </button>
+                  </div>
+                )}
+              </div>
 
               <section className="catalog-section">
                 <div className="section-title">
@@ -1096,14 +1586,68 @@ export function App() {
                   </div>
                   <span>{filteredGames.length} {filteredGames.length === 1 ? "jogo" : "jogos"}</span>
                 </div>
-                {loading ? <div className="loading-grid">Carregando sua central…</div> : filteredGames.length === 0 ? <EmptyState view={view} /> : (
+                {loading ? <div className="loading-grid">Carregando sua central…</div> : filteredGames.length === 0 ? <EmptyState view={view} /> : displayMode === "grid" ? (
                   <div className="games-grid">
                     {paginatedGames.map((game) => (
                       <GameCard key={game.id} game={game} installed={installedById.get(game.id)} task={tasks[game.id]} nativeMode={runtimeInfo?.mode === "native"} onSelect={() => setSelectedGame(game)} onPrimary={() => void primaryAction(game)} onCancel={() => void stopGameDownload(game)} stopping={stoppingDownloads.has(`game:${game.id}`)} favorite={favorites.has(game.id)} onToggleFavorite={() => toggleFavorite(game.id)} onCoverError={() => markBrokenCover(game.id)} coverAvailable={!brokenCoverIds.has(game.id)} />
                     ))}
                   </div>
+                ) : (
+                  <div className="games-list-container">
+                    <div className="games-list-header">
+                      <span className="col-fav" aria-label="Favorito" />
+                      <span className="col-cover">Capa</span>
+                      <span className="col-title">Título</span>
+                      <span className="col-system">Console</span>
+                      <span className="col-genre">Gênero</span>
+                      <span className="col-year">Ano</span>
+                      <span className="col-size">Tamanho</span>
+                      <span className="col-action">Ação</span>
+                    </div>
+                    <div className="games-list-body">
+                      {paginatedGames.map((game) => (
+                        <GameListRow
+                          key={game.id}
+                          game={game}
+                          installed={installedById.get(game.id)}
+                          task={tasks[game.id]}
+                          nativeMode={runtimeInfo?.mode === "native"}
+                          onSelect={() => setSelectedGame(game)}
+                          onPrimary={() => void primaryAction(game)}
+                          onCancel={() => void stopGameDownload(game)}
+                          stopping={stoppingDownloads.has(`game:${game.id}`)}
+                          favorite={favorites.has(game.id)}
+                          onToggleFavorite={() => toggleFavorite(game.id)}
+                          onCoverError={() => markBrokenCover(game.id)}
+                          coverAvailable={!brokenCoverIds.has(game.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 )}
-                {!loading && filteredGames.length > 0 && <div className="catalog-pagination"><label>Por página <select value={itemsPerPage} onChange={(event) => setItemsPerPage(Number(event.target.value))}><option value={24}>24</option><option value={48}>48</option><option value={96}>96</option></select></label><div><button disabled={catalogPage === 1} onClick={() => setCatalogPage((page) => Math.max(1, page - 1))}>Anterior</button><span>Página {catalogPage} de {totalCatalogPages}</span><button disabled={catalogPage === totalCatalogPages} onClick={() => setCatalogPage((page) => Math.min(totalCatalogPages, page + 1))}>Próxima</button></div></div>}
+                {!loading && filteredGames.length > 0 && (
+                  <div className="catalog-pagination">
+                    <div className="pagination-dropdown-box">
+                      <span>Por página</span>
+                      <CustomDropdown
+                        value={itemsPerPage}
+                        onChange={(val) => setItemsPerPage(Number(val))}
+                        options={[
+                          { value: 24, label: "24 jogos" },
+                          { value: 48, label: "48 jogos" },
+                          { value: 96, label: "96 jogos" },
+                        ]}
+                        title="Itens por página"
+                        align="left"
+                      />
+                    </div>
+                    <div>
+                      <button disabled={catalogPage === 1} onClick={() => setCatalogPage((page) => Math.max(1, page - 1))}>Anterior</button>
+                      <span>Página {catalogPage} de {totalCatalogPages}</span>
+                      <button disabled={catalogPage === totalCatalogPages} onClick={() => setCatalogPage((page) => Math.min(totalCatalogPages, page + 1))}>Próxima</button>
+                    </div>
+                  </div>
+                )}
               </section>
             </>
           )}
@@ -1196,11 +1740,84 @@ export function App() {
                   <button className="advanced-toggle" type="button" onClick={() => setAdvancedGraphics((current) => !current)}><SlidersHorizontal size={16} /> {advancedGraphics ? "Ocultar ajustes avançados" : "Ajustar qualidade manualmente"}<ChevronRight size={16} /></button>
                   {advancedGraphics && (
                     <div className="advanced-grid">
-                      <label><span>Resolução interna</span><select value={settingsDraft.graphics.internalResolution} onChange={(event) => updateGraphics({ internalResolution: Number(event.target.value) })}><option value={1}>1x — Nativa</option><option value={2}>2x — 720p</option><option value={3}>3x — 1080p</option><option value={4}>4x — 1440p</option><option value={6}>6x — 4K</option><option value={8}>8x — 5K+</option></select></label>
-                      <label><span>Antisserrilhamento</span><select value={settingsDraft.graphics.antiAliasing} onChange={(event) => updateGraphics({ antiAliasing: event.target.value as GraphicsSettings["antiAliasing"] })}><option value="off">Desativado</option><option value="fxaa">FXAA</option><option value="msaa2">MSAA 2x</option><option value="msaa4">MSAA 4x</option><option value="msaa8">MSAA 8x</option></select></label>
-                      <label><span>Filtragem de textura</span><select value={settingsDraft.graphics.textureFiltering} onChange={(event) => updateGraphics({ textureFiltering: event.target.value as GraphicsSettings["textureFiltering"] })}><option value="nearest">Vizinho mais próximo</option><option value="bilinear">Bilinear</option><option value="trilinear">Trilinear</option></select></label>
-                      <label><span>Filtro anisotrópico</span><select value={settingsDraft.graphics.anisotropicFiltering} onChange={(event) => updateGraphics({ anisotropicFiltering: Number(event.target.value) })}>{[1, 2, 4, 8, 16].map((value) => <option key={value} value={value}>{value}x</option>)}</select></label>
-                      <label><span>Limite de quadros</span><select value={settingsDraft.graphics.frameLimit} onChange={(event) => updateGraphics({ frameLimit: Number(event.target.value) })}><option value={0}>Sem limite</option><option value={30}>30 FPS</option><option value={60}>60 FPS</option><option value={120}>120 FPS</option></select></label>
+                      <div className="select-setting">
+                        <span>Resolução interna</span>
+                        <CustomDropdown
+                          value={settingsDraft.graphics.internalResolution}
+                          onChange={(val) => updateGraphics({ internalResolution: Number(val) })}
+                          options={[
+                            { value: 1, label: "1x — Nativa" },
+                            { value: 2, label: "2x — 720p" },
+                            { value: 3, label: "3x — 1080p" },
+                            { value: 4, label: "4x — 1440p" },
+                            { value: 6, label: "6x — 4K" },
+                            { value: 8, label: "8x — 5K+" },
+                          ]}
+                          title="Resolução interna"
+                          align="left"
+                        />
+                      </div>
+                      <div className="select-setting">
+                        <span>Antisserrilhamento</span>
+                        <CustomDropdown
+                          value={settingsDraft.graphics.antiAliasing}
+                          onChange={(val) => updateGraphics({ antiAliasing: val as GraphicsSettings["antiAliasing"] })}
+                          options={[
+                            { value: "off", label: "Desativado" },
+                            { value: "fxaa", label: "FXAA" },
+                            { value: "msaa2", label: "MSAA 2x" },
+                            { value: "msaa4", label: "MSAA 4x" },
+                            { value: "msaa8", label: "MSAA 8x" },
+                          ]}
+                          title="Antisserrilhamento"
+                          align="left"
+                        />
+                      </div>
+                      <div className="select-setting">
+                        <span>Filtragem de textura</span>
+                        <CustomDropdown
+                          value={settingsDraft.graphics.textureFiltering}
+                          onChange={(val) => updateGraphics({ textureFiltering: val as GraphicsSettings["textureFiltering"] })}
+                          options={[
+                            { value: "nearest", label: "Vizinho mais próximo" },
+                            { value: "bilinear", label: "Bilinear" },
+                            { value: "trilinear", label: "Trilinear" },
+                          ]}
+                          title="Filtragem de textura"
+                          align="left"
+                        />
+                      </div>
+                      <div className="select-setting">
+                        <span>Filtro anisotrópico</span>
+                        <CustomDropdown
+                          value={settingsDraft.graphics.anisotropicFiltering}
+                          onChange={(val) => updateGraphics({ anisotropicFiltering: Number(val) })}
+                          options={[
+                            { value: 1, label: "1x" },
+                            { value: 2, label: "2x" },
+                            { value: 4, label: "4x" },
+                            { value: 8, label: "8x" },
+                            { value: 16, label: "16x" },
+                          ]}
+                          title="Filtro anisotrópico"
+                          align="left"
+                        />
+                      </div>
+                      <div className="select-setting">
+                        <span>Limite de quadros</span>
+                        <CustomDropdown
+                          value={settingsDraft.graphics.frameLimit}
+                          onChange={(val) => updateGraphics({ frameLimit: Number(val) })}
+                          options={[
+                            { value: 0, label: "Sem limite" },
+                            { value: 30, label: "30 FPS" },
+                            { value: 60, label: "60 FPS" },
+                            { value: 120, label: "120 FPS" },
+                          ]}
+                          title="Limite de quadros"
+                          align="left"
+                        />
+                      </div>
                       <label className="switch-row"><span><strong>Sincronização vertical</strong><small>Evita cortes na imagem.</small></span><input type="checkbox" checked={settingsDraft.graphics.vsync} onChange={(event) => updateGraphics({ vsync: event.target.checked })} /></label>
                     </div>
                   )}
@@ -1215,7 +1832,21 @@ export function App() {
 
                 <section className="preference-panel">
                   <div className="preference-heading"><span><Gamepad2 /></span><div><h3>Controles</h3><p>{connectedControllers ? `${connectedControllers} controle${connectedControllers > 1 ? "s" : ""} conectado${connectedControllers > 1 ? "s" : ""}` : "Nenhum controle detectado agora"}</p></div></div>
-                  <label className="select-setting"><span>Perfil preferencial</span><select value={settingsDraft.controllerMode} onChange={(event) => updateSettings({ controllerMode: event.target.value as LauncherSettings["controllerMode"] })}><option value="auto">Detectar automaticamente</option><option value="xinput">Xbox / XInput</option><option value="playstation">PlayStation</option><option value="keyboard">Teclado</option></select></label>
+                  <div className="select-setting">
+                    <span>Perfil preferencial</span>
+                    <CustomDropdown
+                      value={settingsDraft.controllerMode}
+                      onChange={(val) => updateSettings({ controllerMode: val as LauncherSettings["controllerMode"] })}
+                      options={[
+                        { value: "auto", label: "Detectar automaticamente" },
+                        { value: "xinput", label: "Xbox / XInput" },
+                        { value: "playstation", label: "PlayStation" },
+                        { value: "keyboard", label: "Teclado" },
+                      ]}
+                      title="Perfil de controle"
+                      align="left"
+                    />
+                  </div>
                   <p className="settings-note">O remapeamento fino de botões, analógicos e touchpad é aberto no painel nativo de cada emulador.</p>
                 </section>
 
@@ -1229,6 +1860,52 @@ export function App() {
                 <section className="preference-panel preference-panel--library">
                   <div className="preference-heading"><span><HardDrive /></span><div><h3>Biblioteca local</h3><p>{runtimeInfo.libraryPath ?? "Escolha onde jogos, saves e emuladores serão organizados."}</p></div></div>
                   <button className="secondary-action" type="button" onClick={() => void configureLibrary()}>Alterar pasta <ChevronRight size={16} /></button>
+                </section>
+
+                <section className="preference-panel preference-panel--about">
+                  <div className="preference-heading">
+                    <span><Info /></span>
+                    <div>
+                      <h3>Sobre o Aplicativo</h3>
+                      <p>Gerenciamento de versões e canal oficial de atualizações.</p>
+                    </div>
+                  </div>
+
+                  <div className="about-version-card">
+                    <div className="about-version-info">
+                      <strong>
+                        No Lost Media Launcher
+                        <span className="about-status-tag about-status-tag--ok">v{APP_VERSION}</span>
+                        {availableUpdate?.isNewer && (
+                          <span className="about-status-tag about-status-tag--update">
+                            Update {availableUpdate.tagName}
+                          </span>
+                        )}
+                      </strong>
+                      <small>
+                        {updateStatusMessage ?? (availableUpdate?.isNewer ? `Nova versão ${availableUpdate.tagName} disponível para download.` : "Você está usando a versão mais recente.")}
+                      </small>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="about-check-button"
+                      disabled={isCheckingUpdate}
+                      onClick={() => void handleManualCheckUpdates()}
+                    >
+                      <RefreshCw size={14} className={isCheckingUpdate ? "animate-spin" : ""} />
+                      {isCheckingUpdate ? "Verificando…" : "Verificar atualizações"}
+                    </button>
+                  </div>
+
+                  <div className="about-links">
+                    <button type="button" onClick={() => void openExternalUrl("https://nolost.media/")}>
+                      <Globe size={13} /> Site oficial: nolost.media
+                    </button>
+                    <button type="button" onClick={() => void openExternalUrl(`https://github.com/${GITHUB_REPO}`)}>
+                      <ExternalLink size={13} /> Repositório no GitHub
+                    </button>
+                  </div>
                 </section>
               </div>
             </section>
@@ -1296,6 +1973,17 @@ export function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {showUpdateModal && availableUpdate && (
+        <UpdateModal
+          release={availableUpdate}
+          currentVersion={APP_VERSION}
+          onClose={() => setShowUpdateModal(false)}
+          onRemindLater={handleRemindLater}
+          onUpdateNow={() => void handleUpdateNow()}
+          isUpdating={isInstallingUpdate}
+        />
       )}
 
       <div className="toast-stack" aria-live="polite">

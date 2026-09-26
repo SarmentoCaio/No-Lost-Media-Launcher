@@ -106,13 +106,23 @@ fn check_cancelled(cancel: &crate::DownloadCancellation) -> Result<(), String> {
 }
 
 fn validate_source(value: &str) -> Result<Url, String> {
-    let url = Url::parse(value).map_err(|_| "O endereço de download do catálogo é inválido.")?;
+    let mut url_str = value.to_string();
+    if url_str.contains("no-lost-media-bff.onrender.com") {
+        url_str = url_str.replace("https://no-lost-media-bff.onrender.com", "https://api.nolost.media");
+    }
+    let url = Url::parse(&url_str).map_err(|_| "O endereço de download do catálogo é inválido.")?;
     if url.scheme() != "https" {
         return Err("O launcher aceita somente downloads protegidos por HTTPS.".into());
     }
     let host = url.host_str().unwrap_or_default();
     let archive = host == "archive.org" || host.ends_with(".archive.org");
-    let gateway = host == "no-lost-media-bff.onrender.com";
+    let gateway = host == "nolost.media"
+        || host.ends_with(".nolost.media")
+        || host.ends_with(".trycloudflare.com")
+        || host.ends_with(".pages.dev")
+        || host.ends_with(".vercel.app")
+        || host == "no-lost-media-bff.onrender.com"
+        || host.ends_with(".onrender.com");
     if !archive && !gateway {
         return Err(
             "A origem do arquivo não pertence ao acervo autorizado do No Lost Media.".into(),
@@ -223,7 +233,7 @@ fn download(
     }
     ensure_disk_space(cache_dir, game.expected_size, downloaded)?;
     let client = Client::builder()
-        .user_agent("No-Lost-Media-Launcher/0.1")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 No-Lost-Media-Launcher/0.1")
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(60 * 60 * 8))
         .build()
@@ -237,9 +247,9 @@ fn download(
         .map_err(|error| format!("Não foi possível acessar o acervo: {error}"))?;
     if !response.status().is_success() {
         if response.status() == StatusCode::SERVICE_UNAVAILABLE
-            && game.source_url.contains("no-lost-media-bff.onrender.com")
+            && (game.source_url.contains("no-lost-media-bff.onrender.com") || game.source_url.contains("nolost.media"))
         {
-            return Err("O gateway do acervo de PS2 está temporariamente suspenso. Os demais consoles continuam disponíveis.".into());
+            return Err("O gateway do acervo está temporariamente indisponível. Verifique o status da conexão e tente novamente mais tarde.".into());
         }
         return Err(format!(
             "O acervo não liberou este arquivo (HTTP {}). Tente novamente mais tarde.",
@@ -366,6 +376,8 @@ fn collect_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
 
 fn primary_game_file(root: &Path, system: &str) -> Result<PathBuf, String> {
     let priorities: &[&str] = match system {
+        "ps3" => &["iso", "bin", "pkg", "sfb", "self", "eboot.bin"],
+        "pc" => &["exe", "bat", "cmd", "msi", "iso", "bin"],
         "ps1" => &["cue", "chd", "pbp", "bin"],
         "ps2" => &["iso", "chd", "cso", "bin"],
         "gamecube" => &["rvz", "iso", "gcm", "wia", "chd"],
@@ -386,6 +398,11 @@ fn primary_game_file(root: &Path, system: &str) -> Result<PathBuf, String> {
                 .is_some_and(|value| value.eq_ignore_ascii_case(extension))
         }) {
             return Ok(file.clone());
+        }
+    }
+    if system == "pc" || system == "ps3" {
+        if let Some(first_file) = files.first() {
+            return Ok(first_file.clone());
         }
     }
     Err("O pacote foi baixado, mas não contém um formato compatível com este console.".into())

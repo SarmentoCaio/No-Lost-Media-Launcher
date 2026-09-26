@@ -1457,6 +1457,7 @@ fn emulator_metadata(id: &str) -> Option<(&'static str, Vec<&'static str>, Vec<&
             vec!["nes", "snes", "gba", "n64", "dreamcast"],
             vec!["retroarch.exe"],
         )),
+        "rpcs3" => Some(("RPCS3", vec!["ps3"], vec!["rpcs3.exe", "RPCS3.exe"])),
         _ => None,
     }
 }
@@ -1519,19 +1520,14 @@ fn detect_emulator(config: &AppConfig, id: &str) -> Option<PathBuf> {
 fn build_runtime_info(state: &AppState) -> RuntimeInfo {
     let config: AppConfig = read_json(&state.config_path());
     let hardware_profile = hardware_profile();
-    let emulators: Vec<EmulatorDefinition> = ["pcsx2", "duckstation", "dolphin", "retroarch"]
+    let emulators: Vec<EmulatorDefinition> = ["pcsx2", "duckstation", "dolphin", "retroarch", "rpcs3"]
         .into_iter()
         .filter_map(|id| {
             let (name, systems, _) = emulator_metadata(id)?;
             let managed = managed_emulators::manifest(id);
             let installed = detect_emulator(&config, id).is_some();
             Some(EmulatorDefinition {
-                id: match id {
-                    "pcsx2" => "pcsx2",
-                    "duckstation" => "duckstation",
-                    "dolphin" => "dolphin",
-                    _ => "retroarch",
-                },
+                id,
                 name,
                 systems,
                 installed,
@@ -1549,6 +1545,7 @@ fn build_runtime_info(state: &AppState) -> RuntimeInfo {
                         Some("Você precisará adicionar a BIOS do seu próprio console.")
                     }
                     "retroarch" => Some("Dreamcast pode exigir a BIOS do seu próprio console."),
+                    "rpcs3" => Some("Instale a firmware oficial do PS3 (PS3UPDAT.PUP) pelo próprio RPCS3."),
                     _ => None,
                 },
                 bios_import: matches!(id, "pcsx2" | "duckstation"),
@@ -1585,6 +1582,8 @@ fn build_runtime_info(state: &AppState) -> RuntimeInfo {
 
 fn supported_extensions(system: &str) -> &'static [&'static str] {
     match system {
+        "ps3" => &["iso", "bin", "pkg", "sfb", "self", "eboot.bin"],
+        "pc" => &["exe", "bat", "cmd", "msi", "iso", "zip", "7z"],
         "ps2" => &["iso", "bin", "chd", "cso"],
         "ps1" => &["chd", "cue", "bin", "pbp"],
         "gamecube" => &["iso", "gcm", "rvz", "wia", "chd"],
@@ -1600,6 +1599,7 @@ fn supported_extensions(system: &str) -> &'static [&'static str] {
 
 fn emulator_for_system(system: &str) -> Option<&'static str> {
     match system {
+        "ps3" => Some("rpcs3"),
         "ps2" => Some("pcsx2"),
         "ps1" => Some("duckstation"),
         "gamecube" | "wii" => Some("dolphin"),
@@ -1948,6 +1948,78 @@ async fn install_game(
 #[tauri::command]
 fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String> {
     let config: AppConfig = read_json(&state.config_path());
+    let mut library: Vec<InstalledGame> = read_json(&state.library_index_path());
+    let installed = library
+        .iter_mut()
+        .find(|item| item.game_id == game.id)
+        .ok_or_else(|| "O jogo ainda não foi adicionado à biblioteca.".to_string())?;
+    let game_path = installed
+        .local_path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .ok_or_else(|| "O arquivo local do jogo não foi encontrado.".to_string())?;
+
+    if game.system == "pc" {
+        let is_exe = game_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd"))
+            .unwrap_or(false);
+
+        if is_exe {
+            let mut command = Command::new(&game_path);
+            if let Some(parent) = game_path.parent() {
+                command.current_dir(parent);
+            }
+            command
+                .spawn()
+                .map_err(|error| format!("Não foi possível iniciar o jogo de PC: {error}"))?;
+        } else {
+            let target = if game_path.is_file() {
+                game_path.parent().unwrap_or(&game_path)
+            } else {
+                &game_path
+            };
+            Command::new("explorer")
+                .arg(target)
+                .spawn()
+                .map_err(|error| format!("Não foi possível abrir a pasta do jogo: {error}"))?;
+        }
+        installed.last_played_at = Some(Utc::now().to_rfc3339());
+        let _ = write_json(&state.library_index_path(), &library);
+        return Ok(());
+    }
+
+    if game.system == "ps3" {
+        if let Some(emulator) = detect_emulator(&config, "rpcs3") {
+            let mut command = Command::new(&emulator);
+            if let Some(parent) = emulator.parent() {
+                command.current_dir(parent);
+            }
+            if config.settings.start_fullscreen {
+                command.arg("--fullscreen");
+            }
+            command.arg(&game_path);
+            command
+                .spawn()
+                .map_err(|error| format!("Não foi possível abrir o RPCS3: {error}"))?;
+            installed.last_played_at = Some(Utc::now().to_rfc3339());
+            let _ = write_json(&state.library_index_path(), &library);
+            return Ok(());
+        } else {
+            let target = if game_path.is_file() {
+                game_path.parent().unwrap_or(&game_path)
+            } else {
+                &game_path
+            };
+            let _ = Command::new("explorer").arg(target).spawn();
+            installed.last_played_at = Some(Utc::now().to_rfc3339());
+            let _ = write_json(&state.library_index_path(), &library);
+            return Err("O jogo de PS3 está pronto na pasta que abrimos para você. Para executá-lo diretamente, aponte ou instale o RPCS3 nas configurações.".into());
+        }
+    }
+
     let hardware = hardware_profile();
     let graphics = effective_graphics(&config.settings, &hardware);
     let emulator_id = emulator_for_system(&game.system)
@@ -1973,17 +2045,6 @@ fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String
         emulator_settings.video.vsync = graphics.vsync;
     }
     apply_emulator_settings_to_disk(&emulator, &emulator_settings)?;
-    let mut library: Vec<InstalledGame> = read_json(&state.library_index_path());
-    let installed = library
-        .iter_mut()
-        .find(|item| item.game_id == game.id)
-        .ok_or_else(|| "O jogo ainda não foi adicionado à biblioteca.".to_string())?;
-    let game_path = installed
-        .local_path
-        .as_ref()
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-        .ok_or_else(|| "O arquivo local do jogo não foi encontrado.".to_string())?;
 
     let mut command = Command::new(&emulator);
     if let Some(parent) = emulator.parent() {
@@ -2245,6 +2306,23 @@ fn remove_game(
     })
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .spawn()
+            .map_err(|error| format!("Não foi possível abrir o link: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = url;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{direct_managed_directory, remove_legacy_save_files, save_file_matches};
@@ -2301,6 +2379,10 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(url) = deep_link_from_args(args) {
                 deliver_deep_link(app, url);
+            } else if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
@@ -2339,7 +2421,8 @@ pub fn run() {
             import_local_game,
             install_game,
             launch_game,
-            remove_game
+            remove_game,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("erro ao executar o No Lost Media Launcher");

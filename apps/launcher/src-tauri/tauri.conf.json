@@ -20,6 +20,8 @@
         "resizable": true,
         "fullscreen": false,
         "center": true,
+        "visible": true,
+        "skipTaskbar": false,
         "backgroundColor": "#080b12"
       }
     ],
