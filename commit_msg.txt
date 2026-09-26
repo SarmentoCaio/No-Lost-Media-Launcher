@@ -1,0 +1,13 @@
+feat: silent in-app update via tauri-plugin-updater
+
+Atualizar agora baixa o instalador em background, instala silenciosamente
+e reinicia o launcher automaticamente sem abrir o navegador.
+
+- Add tauri-plugin-updater and tauri-plugin-process to Cargo.toml
+- Register both plugins in lib.rs builder
+- Configure updater endpoint in tauri.conf.json pointing to GitHub Releases
+- Rewrite updateService.ts: add downloadAndInstallUpdate with progress callbacks
+- Update App.tsx: handleUpdateNow uses silent install flow with progress state
+- Update UpdateModal.tsx: show progress bar (determinate/indeterminate) and spinner
+- Add CSS for progress bar animation and animate-spin keyframe
+- Install @tauri-apps/plugin-updater and @tauri-apps/plugin-process npm packages

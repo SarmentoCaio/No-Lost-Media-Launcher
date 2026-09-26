@@ -63,11 +63,13 @@ import { CustomDropdown } from "./components/CustomDropdown";
 import { UpdateModal } from "./components/UpdateModal";
 import {
   checkForUpdates,
+  downloadAndInstallUpdate,
   openExternalUrl,
   APP_VERSION,
   GITHUB_REPO,
   UPDATE_DISMISSED_SESSION_KEY,
   type AppRelease,
+  type UpdateProgress,
 } from "./services/updateService";
 
 type ViewId = "home" | "library" | "downloads" | "emulators" | "settings";
@@ -611,6 +613,7 @@ export function App() {
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   const [displayMode, setDisplayMode] = useState<"grid" | "list">(() => {
     try {
       const saved = localStorage.getItem("nlm_display_mode");
@@ -680,15 +683,19 @@ export function App() {
   const handleUpdateNow = async () => {
     if (!availableUpdate) return;
     setIsInstallingUpdate(true);
-    notify("Iniciando download da atualização...", "info");
-    const targetUrl = availableUpdate.setupAsset?.browserDownloadUrl || availableUpdate.htmlUrl;
+    setUpdateProgress(null);
+    notify("Baixando atualização em segundo plano…", "info");
     try {
-      await openExternalUrl(targetUrl);
-    } catch {
-      window.open(targetUrl, "_blank");
+      await downloadAndInstallUpdate((progress) => {
+        setUpdateProgress(progress);
+      });
+      // Se chegou aqui, relaunch() foi chamado — a linha abaixo não será atingida
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notify(`Falha na atualização: ${message}`, "error");
+      setIsInstallingUpdate(false);
+      setUpdateProgress(null);
     }
-    setIsInstallingUpdate(false);
-    setShowUpdateModal(false);
   };
 
   useEffect(() => {
@@ -1993,6 +2000,7 @@ export function App() {
           onRemindLater={handleRemindLater}
           onUpdateNow={() => void handleUpdateNow()}
           isUpdating={isInstallingUpdate}
+          progress={updateProgress}
         />
       )}
 

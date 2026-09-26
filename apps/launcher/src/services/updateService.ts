@@ -1,3 +1,5 @@
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 
 export const APP_VERSION = "0.1.2";
@@ -31,6 +33,15 @@ export interface UpdateCheckResult {
   error?: string;
 }
 
+export interface UpdateProgress {
+  /** Bytes já baixados */
+  downloaded: number;
+  /** Total de bytes (pode ser undefined se Content-Length não estiver disponível) */
+  total?: number;
+  /** Percentual de 0 a 100 (undefined se total não conhecido) */
+  percent?: number;
+}
+
 /**
  * Normaliza e compara duas versões semânticas (ex: "v0.1.2" vs "0.1.1").
  * Retorna:
@@ -55,6 +66,8 @@ export function compareSemver(v1: string, v2: string): number {
 
 /**
  * Consulta a última release publicada no repositório GitHub.
+ * Usa a GitHub API diretamente (sem o plugin do Tauri) para obter os metadados
+ * de exibição (notas de release, tamanho, data) que serão mostrados no modal.
  */
 export async function checkForUpdates(currentVersion: string = APP_VERSION): Promise<UpdateCheckResult> {
   try {
@@ -123,6 +136,52 @@ export async function checkForUpdates(currentVersion: string = APP_VERSION): Pro
       error: message,
     };
   }
+}
+
+/**
+ * Realiza a atualização silenciosa usando o tauri-plugin-updater:
+ *  1. Verifica se há atualização disponível via endpoint do Tauri
+ *  2. Baixa o instalador em background reportando progresso
+ *  3. Instala silenciosamente e reinicia o app
+ *
+ * @param onProgress Callback chamado a cada chunk baixado
+ * @throws Se não houver atualização disponível ou ocorrer um erro de rede/disco
+ */
+export async function downloadAndInstallUpdate(
+  onProgress?: (progress: UpdateProgress) => void
+): Promise<void> {
+  const update = await check();
+
+  if (!update?.available) {
+    throw new Error("Nenhuma atualização disponível para instalação.");
+  }
+
+  let downloaded = 0;
+  let total: number | undefined;
+
+  await update.downloadAndInstall((event) => {
+    switch (event.event) {
+      case "Started":
+        total = event.data.contentLength ?? undefined;
+        downloaded = 0;
+        onProgress?.({ downloaded: 0, total, percent: 0 });
+        break;
+      case "Progress":
+        downloaded += event.data.chunkLength;
+        onProgress?.({
+          downloaded,
+          total,
+          percent: total ? Math.round((downloaded / total) * 100) : undefined,
+        });
+        break;
+      case "Finished":
+        onProgress?.({ downloaded, total, percent: 100 });
+        break;
+    }
+  });
+
+  // Reinicia o app para aplicar a atualização instalada
+  await relaunch();
 }
 
 /**

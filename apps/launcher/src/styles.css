@@ -2192,6 +2192,57 @@ button:focus-visible, article:focus-visible, input:focus-visible, select:focus-v
   font-family: var(--font-body);
 }
 
+/* Barra de progresso do download de atualização */
+.update-dialog__progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+
+.update-dialog__progress-bar-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.update-dialog__progress-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  transition: width 0.25s ease;
+  will-change: width;
+}
+
+/* Animação indeterminate quando Content-Length não está disponível */
+.update-dialog__progress-bar-fill--indeterminate {
+  width: 40% !important;
+  animation: progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.update-dialog__progress-label {
+  font-size: 11px;
+  color: var(--text-muted, #94a3b8);
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Spinner para o botão de atualização */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
 /* ==========================================================================
    Settings "Sobre o Aplicativo" Styles
    ========================================================================== */

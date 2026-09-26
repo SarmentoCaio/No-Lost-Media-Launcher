@@ -1,5 +1,5 @@
-import { Download, ExternalLink, Sparkles, X, Clock, HardDrive, CheckCircle2 } from "lucide-react";
-import type { AppRelease } from "../services/updateService";
+import { Download, ExternalLink, Sparkles, X, Clock, HardDrive, CheckCircle2, Loader2 } from "lucide-react";
+import type { AppRelease, UpdateProgress } from "../services/updateService";
 import { openExternalUrl } from "../services/updateService";
 
 interface UpdateModalProps {
@@ -9,6 +9,7 @@ interface UpdateModalProps {
   onRemindLater: () => void;
   onUpdateNow: () => void;
   isUpdating?: boolean;
+  progress?: UpdateProgress | null;
 }
 
 export function UpdateModal({
@@ -18,6 +19,7 @@ export function UpdateModal({
   onRemindLater,
   onUpdateNow,
   isUpdating = false,
+  progress = null,
 }: UpdateModalProps) {
   const formattedDate = release.publishedAt
     ? new Date(release.publishedAt).toLocaleDateString("pt-BR", {
@@ -30,6 +32,20 @@ export function UpdateModal({
   const fileSizeLabel = release.setupAsset?.size
     ? `${(release.setupAsset.size / (1024 * 1024)).toFixed(1)} MB`
     : null;
+
+  // Label do botão de atualização
+  const updateLabel = (() => {
+    if (!isUpdating) return "Atualizar agora";
+    if (!progress) return "Preparando download…";
+    if (progress.percent === 100) return "Instalando…";
+    if (progress.percent !== undefined) return `Baixando… ${progress.percent}%`;
+    // Sem Content-Length: mostra bytes baixados
+    const mb = (progress.downloaded / (1024 * 1024)).toFixed(1);
+    return `Baixando… ${mb} MB`;
+  })();
+
+  // Porcentagem para a barra (0–100 ou null se desconhecido)
+  const barPercent = progress?.percent ?? null;
 
   return (
     <div
@@ -94,6 +110,21 @@ export function UpdateModal({
           </span>
         </div>
 
+        {/* Barra de progresso — exibida somente durante a instalação */}
+        {isUpdating && (
+          <div className="update-dialog__progress-wrap" aria-label="Progresso do download">
+            <div className="update-dialog__progress-bar-track">
+              <div
+                className={`update-dialog__progress-bar-fill${barPercent === null ? " update-dialog__progress-bar-fill--indeterminate" : ""}`}
+                style={barPercent !== null ? { width: `${barPercent}%` } : undefined}
+              />
+            </div>
+            <span className="update-dialog__progress-label">
+              {barPercent !== null ? `${barPercent}%` : "Calculando…"}
+            </span>
+          </div>
+        )}
+
         <div className="update-dialog__notes-section">
           <div className="update-dialog__notes-title">
             <span>O que mudou nesta versão</span>
@@ -133,8 +164,12 @@ export function UpdateModal({
             disabled={isUpdating}
             onClick={onUpdateNow}
           >
-            <Download size={16} />
-            {isUpdating ? "Iniciando atualização…" : "Atualizar agora"}
+            {isUpdating ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Download size={16} />
+            )}
+            {updateLabel}
           </button>
         </div>
       </div>
