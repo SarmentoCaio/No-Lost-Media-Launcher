@@ -67,6 +67,7 @@ import { BiosAssistantModal } from "./components/BiosAssistantModal";
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
+  installUpdateViaFallback,
   openExternalUrl,
   APP_VERSION,
   GITHUB_REPO,
@@ -696,10 +697,26 @@ export function App() {
       });
       // Se chegou aqui, relaunch() foi chamado — a linha abaixo não será atingida
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      notify(`Falha na atualização: ${message}`, "error");
-      setIsInstallingUpdate(false);
-      setUpdateProgress(null);
+      console.warn("Tauri updater não pôde concluir, usando fallback direto via instalador:", error);
+      try {
+        const setupAsset = availableUpdate.setupAsset 
+          || availableUpdate.assets.find((a) => a.name.toLowerCase().endsWith(".exe"));
+        const downloadUrl = setupAsset?.browserDownloadUrl 
+          || `https://github.com/${GITHUB_REPO}/releases/download/${availableUpdate.tagName}/No-Lost-Media-Launcher-Setup.exe`;
+
+        notify("Baixando e executando instalador da nova versão…", "info");
+        await installUpdateViaFallback(downloadUrl);
+      } catch (fallbackError) {
+        const message = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        notify(`Falha na atualização automática: ${message}. Abrindo navegador…`, "error");
+        if (availableUpdate.setupAsset?.browserDownloadUrl) {
+          await openExternalUrl(availableUpdate.setupAsset.browserDownloadUrl);
+        } else {
+          await openExternalUrl(availableUpdate.htmlUrl);
+        }
+        setIsInstallingUpdate(false);
+        setUpdateProgress(null);
+      }
     }
   };
 

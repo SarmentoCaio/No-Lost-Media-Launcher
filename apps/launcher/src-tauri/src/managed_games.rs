@@ -440,28 +440,126 @@ fn download(
 fn extract_zip(
     source: &Path,
     destination: &Path,
+    channel: &Channel<GameInstallEvent>,
     cancel: &crate::DownloadCancellation,
 ) -> Result<(), String> {
     let file = fs::File::open(source).map_err(|error| error.to_string())?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| format!("O arquivo ZIP não pôde ser aberto: {error}"))?;
-    for index in 0..archive.len() {
+    let total = archive.len();
+    for index in 0..total {
         check_cancelled(cancel)?;
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
         let relative = entry
             .enclosed_name()
             .ok_or_else(|| "O arquivo compactado contém um caminho inseguro.".to_string())?;
         let output_path = destination.join(relative);
+        let pct = 86.0 + ((index + 1) as f64 / total.max(1) as f64) * 13.0;
+        let file_name = output_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("arquivo");
+        send(
+            channel,
+            "extracting",
+            pct,
+            &format!("Extraindo: {file_name} ({}/{})…", index + 1, total),
+        );
         if entry.is_dir() {
             fs::create_dir_all(&output_path).map_err(|error| error.to_string())?;
         } else {
             if let Some(parent) = output_path.parent() {
                 fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
-            let mut output = fs::File::create(output_path).map_err(|error| error.to_string())?;
-            std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+            let output = fs::File::create(&output_path).map_err(|error| error.to_string())?;
+            let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, output);
+            std::io::copy(&mut entry, &mut writer).map_err(|error| error.to_string())?;
+            use std::io::Write;
+            writer.flush().map_err(|error| error.to_string())?;
         }
     }
+    Ok(())
+}
+
+fn extract_7z(
+    source: &Path,
+    destination: &Path,
+    channel: &Channel<GameInstallEvent>,
+    cancel: &crate::DownloadCancellation,
+) -> Result<(), String> {
+    check_cancelled(cancel)?;
+    send(channel, "extracting", 86.0, "Iniciando descompressão do pacote 7z…");
+
+    let mut file_idx = 0usize;
+    sevenz_rust::decompress_file_with_extract_fn(source, destination, |entry, reader, dest| {
+        if cancel.is_requested() {
+            return Ok(false);
+        }
+        file_idx += 1;
+        let file_name = entry.name().to_string();
+        let target_path = dest.join(&file_name);
+
+        let pct = 86.0 + (file_idx as f64 % 14.0);
+        send(
+            channel,
+            "extracting",
+            pct,
+            &format!("Extraindo: {file_name}…"),
+        );
+
+        if entry.is_directory() {
+            fs::create_dir_all(&target_path).map_err(sevenz_rust::Error::io)?;
+            return Ok(true);
+        }
+
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(sevenz_rust::Error::io)?;
+        }
+
+        let out_file = fs::File::create(&target_path).map_err(sevenz_rust::Error::io)?;
+        let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, out_file);
+
+        let total_size = entry.size();
+        if total_size > 5 * 1024 * 1024 {
+            let mut buffer = vec![0u8; 1024 * 1024];
+            let mut copied = 0u64;
+            let mut last_pct = 0u64;
+            loop {
+                if cancel.is_requested() {
+                    return Ok(false);
+                }
+                let n = reader.read(&mut buffer).map_err(sevenz_rust::Error::io)?;
+                if n == 0 {
+                    break;
+                }
+                writer.write_all(&buffer[..n]).map_err(sevenz_rust::Error::io)?;
+                copied += n as u64;
+                let file_pct = (copied * 100 / total_size).min(100);
+                if file_pct != last_pct && file_pct % 10 == 0 {
+                    last_pct = file_pct;
+                    let overall_pct = 86.0 + (copied as f64 / total_size as f64) * 13.0;
+                    send(
+                        channel,
+                        "extracting",
+                        overall_pct,
+                        &format!(
+                            "Extraindo {file_name}: {file_pct}% ({} MB de {} MB)…",
+                            copied / (1024 * 1024),
+                            total_size / (1024 * 1024)
+                        ),
+                    );
+                }
+            }
+        } else {
+            std::io::copy(reader, &mut writer).map_err(sevenz_rust::Error::io)?;
+        }
+        writer.flush().map_err(sevenz_rust::Error::io)?;
+
+        Ok(true)
+    })
+    .map_err(|error| format!("Não foi possível extrair o arquivo 7z: {error}"))?;
+
+    check_cancelled(cancel)?;
     Ok(())
 }
 
@@ -480,7 +578,7 @@ fn collect_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
 fn primary_game_file(root: &Path, system: &str) -> Result<PathBuf, String> {
     let priorities: &[&str] = match system {
         "ps3" => &["iso", "bin", "pkg", "sfb", "self", "eboot.bin"],
-        "pc" => &["exe", "bat", "cmd", "msi", "iso", "bin"],
+        "pc" => &["exe", "bat", "cmd", "msi", "iso", "cue", "bin"],
         "ps1" => &["cue", "chd", "pbp", "bin"],
         "ps2" => &["iso", "chd", "cso", "bin"],
         "gamecube" => &["rvz", "iso", "gcm", "wia", "chd"],
@@ -559,11 +657,9 @@ fn install_game_inner(
         "Preparando o jogo para o emulador…",
     );
     if extension == "zip" {
-        extract_zip(&downloaded, &staging, &cancel)?;
+        extract_zip(&downloaded, &staging, &channel, &cancel)?;
     } else if extension == "7z" {
-        check_cancelled(&cancel)?;
-        sevenz_rust::decompress_file(&downloaded, &staging)
-            .map_err(|error| format!("Não foi possível extrair o arquivo 7z: {error}"))?;
+        extract_7z(&downloaded, &staging, &channel, &cancel)?;
     } else {
         let destination = staging.join(local_file_name(game.file_name)?);
         fs::copy(&downloaded, destination).map_err(|error| error.to_string())?;

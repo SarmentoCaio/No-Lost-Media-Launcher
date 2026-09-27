@@ -3093,6 +3093,69 @@ fn open_external_url(url: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn install_update_from_url(
+    app: tauri::AppHandle,
+    url: String,
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let temp_dir = std::env::temp_dir();
+        let installer_path = temp_dir.join("No-Lost-Media-Launcher-Setup-Update.exe");
+
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .build() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Erro ao criar cliente HTTP: {e}");
+                    return;
+                }
+            };
+
+        let mut response = match client
+            .get(&url)
+            .header("User-Agent", "NoLostMedia-Launcher")
+            .send() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Falha ao conectar para baixar atualização: {e}");
+                    return;
+                }
+            };
+
+        if !response.status().is_success() {
+            eprintln!("O servidor retornou status {}", response.status());
+            return;
+        }
+
+        let mut file = match std::fs::File::create(&installer_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Falha ao criar arquivo de instalação: {e}");
+                return;
+            }
+        };
+
+        if let Err(e) = std::io::copy(&mut response, &mut file) {
+            eprintln!("Erro ao gravar dados do instalador: {e}");
+            return;
+        }
+        drop(file);
+
+        #[cfg(windows)]
+        {
+            if let Err(e) = std::process::Command::new(&installer_path).spawn() {
+                eprintln!("Falha ao iniciar o instalador: {e}");
+                return;
+            }
+        }
+
+        app.exit(0);
+    });
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{direct_managed_directory, remove_legacy_save_files, save_file_matches};
@@ -3203,7 +3266,8 @@ pub fn run() {
             install_game,
             launch_game,
             remove_game,
-            open_external_url
+            open_external_url,
+            install_update_from_url
         ])
         .run(tauri::generate_context!())
         .expect("erro ao executar o No Lost Media Launcher");

@@ -185,6 +185,14 @@ export async function downloadAndInstallUpdate(
 }
 
 /**
+ * Baixa e executa o instalador diretamente via comando nativo Rust, contornando
+ * qualquer eventual falha do tauri-plugin-updater (ex: falta de latest.json ou erro de assinatura)
+ */
+export async function installUpdateViaFallback(url: string): Promise<void> {
+  await invoke("install_update_from_url", { url });
+}
+
+/**
  * Abre uma URL externamente no navegador padrão do usuário ou via Tauri
  */
 export async function openExternalUrl(url: string): Promise<void> {
