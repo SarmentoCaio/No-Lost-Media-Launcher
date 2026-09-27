@@ -1,7 +1,7 @@
 use reqwest::{
-    blocking::Client,
-    header::{CONTENT_LENGTH, RANGE},
-    StatusCode, Url,
+    blocking::{Client, Response},
+    header::{CONTENT_LENGTH, LOCATION, RANGE},
+    redirect, StatusCode, Url,
 };
 use serde::Serialize;
 use sha1::{Digest, Sha1};
@@ -184,6 +184,49 @@ fn verify_sha1(path: &Path, expected: &str) -> Result<bool, String> {
     Ok(format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(expected))
 }
 
+const DEFAULT_ARCHIVE_COOKIE: &str = "logged-in-user=nathatargino.dev%40gmail.com; logged-in-sig=1821453954%201789917954%20Nwul2op1i%2BJ1x5jZxsYspiC6jnnORKhvrwluHg5VJTnCqALRFgz7dFvdw1YYlzFGnUIvF4grDOubSiqaD5EMw9hAWmX0xgvpGDeR7e8j8pCZ%2BX%2Bx%2B562uCZZUZl%2BDIWyhQ%2FGrzdN6wCKHAoKQ3PRyZuPUsC7bfkqhE23kAqAtuZEGg%2B4QJ6%2FaQxHR2vC0n4TNFgLkKZPABmkUOiSSwnS7e4qDqnPOf8H4j6Rtp1ZSHBXMi%2FGotbGdhqaKH4odbBjwIpRe00CIAyIRyeIGuNCD7Yt3cFBx0A%2FbaV6UwEAER%2FGVCpWJ96XJIQAEOXh%2Be1cI9YEXZWw7JkmK5fP1ZjwPg%3D%3D;";
+
+fn resolve_archive_response(
+    client: &Client,
+    initial_url: &Url,
+    downloaded: u64,
+    cookie: &str,
+) -> Result<(Response, Url), String> {
+    let mut current_url = initial_url.clone();
+    let mut redirects = 0;
+    const MAX_REDIRECTS: usize = 8;
+
+    while redirects < MAX_REDIRECTS {
+        let mut request = client.get(current_url.clone());
+        if downloaded > 0 {
+            request = request.header(RANGE, format!("bytes={downloaded}-"));
+        }
+        if current_url.host_str().map(|h| h.ends_with("archive.org")).unwrap_or(false) {
+            request = request.header("Cookie", cookie);
+        }
+
+        let response = request
+            .send()
+            .map_err(|error| format!("Não foi possível acessar o acervo: {error}"))?;
+
+        if response.status().is_redirection() {
+            if let Some(location) = response.headers().get(LOCATION) {
+                if let Ok(loc_str) = location.to_str() {
+                    if let Ok(next_url) = current_url.join(loc_str) {
+                        current_url = next_url;
+                        redirects += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        return Ok((response, current_url));
+    }
+
+    Err("Limite de redirecionamentos do acervo excedido.".into())
+}
+
 fn download(
     game: &GameDownload<'_>,
     cache_dir: &Path,
@@ -241,30 +284,67 @@ fn download(
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 No-Lost-Media-Launcher/0.1")
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(60 * 60 * 8))
+        .redirect(redirect::Policy::none())
         .build()
         .map_err(|error| error.to_string())?;
-    let mut request = client.get(url.clone());
-    if downloaded > 0 {
-        request = request.header(RANGE, format!("bytes={downloaded}-"));
+
+    let mut target_url = url.clone();
+    // Converte qualquer URL de gateway (/api/stream/) diretamente para Archive.org
+    if target_url.as_str().contains("/api/stream/") {
+        let direct_str = target_url
+            .as_str()
+            .replace("https://api.nolost.media/api/stream", "https://archive.org/download")
+            .replace("https://no-lost-media-bff.onrender.com/api/stream", "https://archive.org/download");
+        if let Ok(direct_url) = Url::parse(&direct_str) {
+            target_url = direct_url;
+        }
     }
-    let mut response = request
-        .send()
-        .map_err(|error| format!("Não foi possível acessar o acervo: {error}"))?;
+
+    let cookie = std::env::var("ARCHIVE_COOKIE").unwrap_or_else(|_| DEFAULT_ARCHIVE_COOKIE.to_string());
+    let (mut response, final_url) = resolve_archive_response(&client, &target_url, downloaded, &cookie)?;
+    target_url = final_url;
+
+    // Se retornar 404 em coleção PS2 particionada (Parte 1 vs Parte 2), tenta a outra partição automaticamente
+    if response.status() == StatusCode::NOT_FOUND {
+        let url_str = target_url.as_str();
+        let fallback_url_opt = if url_str.contains("RedumpSonyPS2NTSCU/") && !url_str.contains("RedumpSonyPS2NTSCUPart2") {
+            Url::parse(&url_str.replace("RedumpSonyPS2NTSCU/", "RedumpSonyPS2NTSCUPart2/")).ok()
+        } else if url_str.contains("RedumpSonyPS2NTSCUPart2/") {
+            Url::parse(&url_str.replace("RedumpSonyPS2NTSCUPart2/", "RedumpSonyPS2NTSCU/")).ok()
+        } else {
+            None
+        };
+
+        if let Some(fallback_url) = fallback_url_opt {
+            if let Ok((fb_resp, fb_url)) = resolve_archive_response(&client, &fallback_url, downloaded, &cookie) {
+                if fb_resp.status().is_success() {
+                    target_url = fb_url;
+                    response = fb_resp;
+                }
+            }
+        }
+    }
 
     if downloaded > 0 && response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
         let _ = fs::remove_file(&partial);
         downloaded = 0;
-        response = client
-            .get(url)
-            .send()
-            .map_err(|error| format!("Não foi possível acessar o acervo: {error}"))?;
+        let (retry_resp, _) = resolve_archive_response(&client, &target_url, 0, &cookie)?;
+        response = retry_resp;
     }
 
     if !response.status().is_success() {
-        if response.status() == StatusCode::SERVICE_UNAVAILABLE
-            && (game.source_url.contains("no-lost-media-bff.onrender.com") || game.source_url.contains("nolost.media"))
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(format!(
+                "O acervo do Archive.org recusou o download de {} (HTTP {}). Verifique sua conexão.",
+                game.title, status
+            ));
+        }
+        if status.as_u16() == 530
+            || status == StatusCode::SERVICE_UNAVAILABLE
+            || status == StatusCode::BAD_GATEWAY
         {
-            return Err("O gateway do acervo está temporariamente indisponível. Verifique o status da conexão e tente novamente mais tarde.".into());
+            return Err("O servidor do acervo está temporariamente indisponível (Erro 530/503). Tente novamente mais tarde.".into());
         }
         return Err(format!(
             "O acervo não liberou este arquivo (HTTP {}). Tente novamente mais tarde.",

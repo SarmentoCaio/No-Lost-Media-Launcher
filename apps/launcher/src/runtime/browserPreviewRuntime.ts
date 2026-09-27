@@ -1,4 +1,4 @@
-import type { EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, PlatformRuntime, RuntimeInfo } from "@nlm/core";
+import type { BiosImportResult, BiosScanResult, EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, PlatformRuntime, RuntimeInfo } from "@nlm/core";
 
 const STORAGE_KEY = "nlm-launcher-preview-library-v1";
 const defaultLibrary: InstalledGame[] = [
@@ -92,6 +92,7 @@ export class BrowserPreviewRuntime implements PlatformRuntime {
         { id: "duckstation", name: "DuckStation", systems: ["ps1"], installed: true, version: "2026.09.12", managedInstall: true, downloadSizeLabel: "69,3 MB", sourceName: "DuckStation (oficial)", setupNote: "Você precisará adicionar a BIOS do seu próprio console.", biosImport: true },
         { id: "dolphin", name: "Dolphin", systems: ["gamecube", "wii"], installed: false, version: "2609", managedInstall: true, downloadSizeLabel: "19,1 MB", sourceName: "Dolphin Emulator (oficial)", biosImport: false },
         { id: "retroarch", name: "RetroArch", systems: ["nes", "snes", "gba", "n64", "dreamcast"], installed: true, version: "1.22.2", managedInstall: true, downloadSizeBytes: 432270762, downloadSizeLabel: "412 MB", sourceName: "Libretro (oficial)", setupNote: "Dreamcast pode exigir a BIOS do seu próprio console.", biosImport: false },
+        { id: "rpcs3", name: "RPCS3", systems: ["ps3"], installed: false, version: "0.0.42", managedInstall: true, downloadSizeBytes: 38479561, downloadSizeLabel: "36,7 MB", sourceName: "RPCS3 Team (oficial)", setupNote: "Instale a firmware oficial do PS3 (PS3UPDAT.PUP) pelo próprio RPCS3.", biosImport: false },
       ],
     };
   }
@@ -144,6 +145,69 @@ export class BrowserPreviewRuntime implements PlatformRuntime {
   async importBios(): Promise<boolean> {
     await wait(200);
     return true;
+  }
+
+  async checkBiosInstalled(system: string): Promise<boolean> {
+    await wait(100);
+    // In preview mode, return false for ps2 to allow testing the missing BIOS prompt
+    return system !== "ps2";
+  }
+
+  async checkBiosExists(system: string): Promise<boolean> {
+    return this.checkBiosInstalled(system);
+  }
+
+  async openEmulator(emulatorId: string): Promise<void> {
+    await wait(200);
+    console.log(`[BrowserPreview] Abrindo emulador: ${emulatorId}`);
+  }
+
+  async scanAndImportBios(): Promise<BiosScanResult> {
+    await wait(800);
+    return {
+      found: true,
+      imported: [
+        {
+          system: "ps2",
+          consoleName: "PlayStation 2",
+          emulatorId: "pcsx2",
+          sourceFile: "PS2_BIOS.zip",
+          extractedFilesCount: 8,
+          destinationDir: "Library/emulators/pcsx2/bios",
+        },
+        {
+          system: "ps1",
+          consoleName: "PlayStation 1",
+          emulatorId: "duckstation",
+          sourceFile: "PS1_BIOS.zip",
+          extractedFilesCount: 6,
+          destinationDir: "Library/emulators/duckstation/bios",
+        },
+      ],
+      ps3Detected: false,
+      message: "Configuração automática de demonstração concluída!",
+    };
+  }
+
+  async importBiosZip(_filePath?: string, targetSystem?: string): Promise<BiosImportResult> {
+    await wait(600);
+    return {
+      success: true,
+      isPs3: false,
+      item: {
+        system: targetSystem ?? "ps2",
+        consoleName: targetSystem === "ps1" ? "PlayStation 1" : targetSystem === "dreamcast" ? "Dreamcast" : "PlayStation 2",
+        emulatorId: targetSystem === "ps1" ? "duckstation" : targetSystem === "dreamcast" ? "retroarch" : "pcsx2",
+        sourceFile: "manual_bios.zip",
+        extractedFilesCount: 5,
+        destinationDir: "Library/emulators/bios",
+      },
+      message: "BIOS importadas manualmente com sucesso!",
+    };
+  }
+
+  async openFolder(_path?: string): Promise<void> {
+    await wait(100);
   }
 
   async importLocalGame(game: Game): Promise<InstalledGame | null> {

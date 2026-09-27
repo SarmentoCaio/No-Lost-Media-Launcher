@@ -1,4 +1,4 @@
-import type { EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, RemoveGameResult, RuntimeInfo } from "./models";
+import type { BiosImportResult, BiosScanResult, EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, RemoveGameResult, RuntimeInfo } from "./models";
 
 export interface PlatformRuntime {
   getInfo(): Promise<RuntimeInfo>;
@@ -11,6 +11,12 @@ export interface PlatformRuntime {
   getEmulatorSettings(emulatorId: string): Promise<EmulatorSettings>;
   saveEmulatorSettings(settings: EmulatorSettings): Promise<EmulatorSettings>;
   importBios(emulatorId: string): Promise<boolean>;
+  checkBiosInstalled(system: string): Promise<boolean>;
+  checkBiosExists?(system: string): Promise<boolean>;
+  openEmulator?(emulatorId: string): Promise<void>;
+  scanAndImportBios(): Promise<BiosScanResult>;
+  importBiosZip(filePath?: string, targetSystem?: string): Promise<BiosImportResult>;
+  openFolder(path?: string): Promise<void>;
   importLocalGame(game: Game): Promise<InstalledGame | null>;
   installGame(game: Game, onProgress: (progress: InstallProgress) => void): Promise<InstalledGame>;
   launchGame(game: Game): Promise<void>;

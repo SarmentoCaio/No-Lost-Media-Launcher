@@ -474,7 +474,7 @@ fn default_emulator_settings(id: &str, launcher: &LauncherSettings) -> EmulatorS
         },
         controller: EmulatorControllerSettings {
             layout: match id {
-                "pcsx2" => "ps2",
+                "pcsx2" | "rpcs3" => "ps2",
                 "duckstation" => "ps1",
                 "dolphin" => "gamecube",
                 _ => "snes",
@@ -758,7 +758,42 @@ fn action_pairs(
 }
 
 fn apply_pcsx2_detailed(emulator_dir: &Path, settings: &EmulatorSettings) -> Result<(), String> {
-    let ini = emulator_dir.join("inis").join("PCSX2.ini");
+    let inis_dir = emulator_dir.join("inis");
+    fs::create_dir_all(&inis_dir).map_err(|e| e.to_string())?;
+    let ini = inis_dir.join("PCSX2.ini");
+
+    // Modern PCSX2 (v2.x Qt) requires SettingsVersion under [UI] and default folders
+    upsert_ini_section(
+        &ini,
+        "UI",
+        &[
+            ("SettingsVersion", "1".into()),
+            ("InhibitScreensaver", "true".into()),
+            ("ConfirmShutdown", "false".into()),
+        ],
+    )?;
+    upsert_ini_section(
+        &ini,
+        "Folders",
+        &[
+            ("Bios", "bios".into()),
+            ("Snapshots", "snapshots".into()),
+            ("Savestates", "sstates".into()),
+            ("MemoryCards", "memcards".into()),
+        ],
+    )?;
+    upsert_ini_section(
+        &ini,
+        "EmuCore",
+        &[
+            (
+                "EnableWideScreenPatches",
+                settings.video.widescreen_patches.to_string(),
+            ),
+            ("EnableCheats", settings.emulation.cheats.to_string()),
+        ],
+    )?;
+
     let renderer = match settings.video.renderer.as_str() {
         "d3d11" => "3",
         "opengl" => "12",
@@ -890,10 +925,101 @@ fn apply_pcsx2_detailed(emulator_dir: &Path, settings: &EmulatorSettings) -> Res
     Ok(())
 }
 
+fn ensure_duckstation_settings_ini(
+    emulator_dir: &Path,
+    start_fullscreen: bool,
+) -> Result<(), String> {
+    let _ = fs::write(emulator_dir.join("portable.txt"), b"");
+    let _ = fs::create_dir_all(emulator_dir.join("bios"));
+    let ini = emulator_dir.join("settings.ini");
+
+    upsert_ini_section(
+        &ini,
+        "Main",
+        &[
+            ("SetupWizardIncomplete", "false".into()),
+            ("SettingsVersion", "1".into()),
+            ("ConfirmPowerOff", "false".into()),
+            ("InhibitScreensaver", "true".into()),
+            ("StartFullscreen", start_fullscreen.to_string()),
+        ],
+    )?;
+    upsert_ini_section(
+        &ini,
+        "BIOS",
+        &[("SearchDirectory", "bios".into())],
+    )?;
+    upsert_ini_section(
+        &ini,
+        "AutoUpdater",
+        &[("CheckAtStartup", "false".into())],
+    )?;
+
+    Ok(())
+}
+
+fn ensure_rpcs3_settings(emulator_dir: &Path) -> Result<(), String> {
+    let mut candidate_dirs = Vec::new();
+    candidate_dirs.push(emulator_dir.join("GuiConfigs"));
+    if let Some(appdata) = env::var_os("APPDATA") {
+        candidate_dirs.push(PathBuf::from(appdata).join("rpcs3").join("GuiConfigs"));
+    }
+
+    let mut settings = vec![
+        ("confirmationRestart", "false".into()),
+        ("infoBoxEnabledWelcome", "false".into()),
+    ];
+
+    let download_dir = env::var_os("USERPROFILE")
+        .map(|u| PathBuf::from(u).join("Downloads"))
+        .filter(|d| d.is_dir());
+    let download_str = download_dir.map(|d| d.to_string_lossy().replace('\\', "/"));
+    if let Some(ref d_str) = download_str {
+        settings.push(("lastExplorePathPUP", d_str.clone()));
+    }
+
+    for gui_dir in candidate_dirs {
+        let _ = fs::create_dir_all(&gui_dir);
+        let ini = gui_dir.join("CurrentSettings.ini");
+        let _ = upsert_ini_section(&ini, "main_window", &settings);
+    }
+    Ok(())
+}
+
+fn ensure_dolphin_settings(emulator_dir: &Path) -> Result<(), String> {
+    let mut candidate_dirs = Vec::new();
+    let portable_config = emulator_dir.join("User").join("Config");
+    candidate_dirs.push(portable_config);
+
+    if let Some(appdata) = env::var_os("APPDATA") {
+        candidate_dirs.push(PathBuf::from(appdata).join("Dolphin Emulator").join("Config"));
+    }
+    if let Some(userprofile) = env::var_os("USERPROFILE") {
+        candidate_dirs.push(PathBuf::from(userprofile).join("Documents").join("Dolphin Emulator").join("Config"));
+    }
+
+    for cfg_dir in candidate_dirs {
+        let dolphin_ini = cfg_dir.join("Dolphin.ini");
+        if cfg_dir.exists() || dolphin_ini.exists() || cfg_dir.parent().map(|p| p.exists()).unwrap_or(false) {
+            let _ = fs::create_dir_all(&cfg_dir);
+            let _ = upsert_ini_section(
+                &dolphin_ini,
+                "Analytics",
+                &[
+                    ("PermissionAsked", "True".into()),
+                    ("Enabled", "False".into()),
+                ],
+            );
+        }
+    }
+    Ok(())
+}
+
 fn apply_duckstation_detailed(
     emulator_dir: &Path,
     settings: &EmulatorSettings,
 ) -> Result<(), String> {
+    let _ = ensure_duckstation_settings_ini(emulator_dir, true);
     let ini = emulator_dir.join("settings.ini");
     let renderer = match settings.video.renderer.as_str() {
         "d3d11" => "D3D11",
@@ -962,6 +1088,10 @@ fn apply_duckstation_detailed(
         &ini,
         "Main",
         &[
+            ("SetupWizardIncomplete", "false".into()),
+            ("SettingsVersion", "1".into()),
+            ("ConfirmPowerOff", "false".into()),
+            ("InhibitScreensaver", "true".into()),
             (
                 "EmulationSpeed",
                 format!("{:.2}", f32::from(settings.video.speed_percent) / 100.0),
@@ -972,6 +1102,20 @@ fn apply_duckstation_detailed(
             ),
             ("SaveStateOnExit", settings.emulation.auto_save.to_string()),
             ("RewindEnable", settings.emulation.rewind.to_string()),
+        ],
+    )?;
+    upsert_ini_section(
+        &ini,
+        "BIOS",
+        &[
+            ("SearchDirectory", "bios".into()),
+        ],
+    )?;
+    upsert_ini_section(
+        &ini,
+        "AutoUpdater",
+        &[
+            ("CheckAtStartup", "false".into()),
         ],
     )?;
     let mut controller = vec![
@@ -1147,6 +1291,7 @@ fn apply_dolphin_detailed(emulator_dir: &Path, settings: &EmulatorSettings) -> R
                 format!("{:.2}", f32::from(settings.video.speed_percent) / 100.0),
             ),
             ("EnableCheats", settings.emulation.cheats.to_string()),
+            ("WiimoteSource0", "1".into()),
         ],
     )?;
     upsert_ini_section(
@@ -1171,6 +1316,14 @@ fn apply_dolphin_detailed(emulator_dir: &Path, settings: &EmulatorSettings) -> R
             "PauseOnFocusLost",
             settings.emulation.pause_when_inactive.to_string(),
         )],
+    )?;
+    upsert_ini_section(
+        &dolphin_ini,
+        "Analytics",
+        &[
+            ("PermissionAsked", "True".into()),
+            ("Enabled", "False".into()),
+        ],
     )?;
     let mut pad = vec![("Device", "XInput/0/Gamepad".to_string())];
     let (controller_path, controller_section, actions): (PathBuf, &str, &[(&str, &str)]) =
@@ -1392,15 +1545,21 @@ fn apply_emulator_settings_to_disk(
         "pcsx2" if directory.join("portable.ini").is_file() || directory.join("inis").is_dir() => {
             apply_pcsx2_detailed(directory, settings)
         }
-        "duckstation" if directory.join("portable.txt").is_file() => {
+        "duckstation" => {
+            let _ = fs::write(directory.join("portable.txt"), b"");
+            let _ = fs::create_dir_all(directory.join("bios"));
             apply_duckstation_detailed(directory, settings)
         }
-        "dolphin"
-            if directory.join("portable.txt").is_file() || directory.join("User").is_dir() =>
-        {
-            apply_dolphin_detailed(directory, settings)
+        "dolphin" => {
+            let _ = ensure_dolphin_settings(directory);
+            if directory.join("portable.txt").is_file() || directory.join("User").is_dir() {
+                apply_dolphin_detailed(directory, settings)
+            } else {
+                Ok(())
+            }
         }
         "retroarch" => apply_retroarch_detailed(directory, settings).map(|_| ()),
+        "rpcs3" => ensure_rpcs3_settings(directory),
         _ => Ok(()),
     }
 }
@@ -1719,6 +1878,34 @@ fn configure_emulator(
 }
 
 #[tauri::command]
+fn open_emulator(emulator_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let config: AppConfig = read_json(&state.config_path());
+    let emulator = detect_emulator(&config, &emulator_id).ok_or_else(|| {
+        format!(
+            "O emulador {} não foi encontrado ou não está instalado.",
+            emulator_metadata(&emulator_id)
+                .map(|m| m.0)
+                .unwrap_or("solicitado")
+        )
+    })?;
+    if let Some(parent) = emulator.parent() {
+        if emulator_id == "rpcs3" {
+            let _ = ensure_rpcs3_settings(parent);
+        } else if emulator_id == "duckstation" {
+            let _ = ensure_duckstation_settings_ini(parent, false);
+        } else if emulator_id == "dolphin" {
+            let _ = ensure_dolphin_settings(parent);
+        }
+    }
+    let mut cmd = Command::new(&emulator);
+    if let Some(parent) = emulator.parent() {
+        cmd.current_dir(parent);
+    }
+    cmd.spawn().map_err(|e| format!("Não foi possível abrir o emulador: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn install_emulator(
     emulator_id: String,
     on_event: Channel<EmulatorInstallEvent>,
@@ -1749,6 +1936,20 @@ async fn install_emulator(
     unregister_download(&state, &download_key);
     let result = result?;
     let (executable, version) = result?;
+
+    if emulator_id == "rpcs3" {
+        if let Some(parent) = executable.parent() {
+            let _ = ensure_rpcs3_settings(parent);
+        }
+    } else if emulator_id == "duckstation" {
+        if let Some(parent) = executable.parent() {
+            let _ = ensure_duckstation_settings_ini(parent, false);
+        }
+    } else if emulator_id == "dolphin" {
+        if let Some(parent) = executable.parent() {
+            let _ = ensure_dolphin_settings(parent);
+        }
+    }
 
     let mut config: AppConfig = read_json(&config_path);
     config.emulators.insert(emulator_id.clone(), executable);
@@ -1827,6 +2028,541 @@ fn import_bios(
     fs::copy(&source, &destination)
         .map(|_| ())
         .map_err(|error| format!("Não foi possível copiar a BIOS: {error}"))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedBiosInfo {
+    pub system: String,
+    pub console_name: String,
+    pub emulator_id: String,
+    pub source_file: String,
+    pub extracted_files_count: usize,
+    pub destination_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiosScanResult {
+    pub found: bool,
+    pub imported: Vec<ImportedBiosInfo>,
+    pub ps3_detected: bool,
+    pub ps3_file: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiosImportResult {
+    pub success: bool,
+    pub item: Option<ImportedBiosInfo>,
+    pub is_ps3: bool,
+    pub message: String,
+}
+
+fn move_or_copy_file(source: &Path, destination: &Path) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if fs::rename(source, destination).is_err() {
+        fs::copy(source, destination).map_err(|e| format!("Falha ao copiar arquivo: {e}"))?;
+        let _ = fs::remove_file(source);
+    }
+    Ok(())
+}
+
+fn extract_zip_bios(zip_path: &Path, destination_dir: &Path) -> Result<usize, String> {
+    let file = fs::File::open(zip_path).map_err(|e| format!("Não foi possível abrir o ZIP: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Arquivo ZIP inválido ou corrompido: {e}"))?;
+    let mut extracted_count = 0;
+    fs::create_dir_all(destination_dir).map_err(|e| format!("Não foi possível criar a pasta de destino: {e}"))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let relative = match entry.enclosed_name() {
+            Some(path) => path.to_owned(),
+            None => continue,
+        };
+
+        if entry.is_dir() {
+            continue;
+        }
+
+        let file_name = match relative.file_name() {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let target = destination_dir.join(file_name);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        let mut out = fs::File::create(&target).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+        extracted_count += 1;
+    }
+
+    Ok(extracted_count)
+}
+
+fn get_bios_dest_dir(config: &AppConfig, state: &AppState, system: &str) -> PathBuf {
+    let base_emulators = config
+        .library_path
+        .clone()
+        .unwrap_or_else(|| state.data_dir.join("Library"))
+        .join("emulators");
+
+    match system {
+        "ps2" => {
+            if let Some(exe) = detect_emulator(config, "pcsx2") {
+                exe.parent().unwrap_or(&base_emulators.join("pcsx2")).join("bios")
+            } else {
+                base_emulators.join("pcsx2").join("bios")
+            }
+        }
+        "ps1" => {
+            if let Some(exe) = detect_emulator(config, "duckstation") {
+                exe.parent().unwrap_or(&base_emulators.join("duckstation")).join("bios")
+            } else {
+                base_emulators.join("duckstation").join("bios")
+            }
+        }
+        "dreamcast" => {
+            if let Some(exe) = detect_emulator(config, "retroarch") {
+                exe.parent().unwrap_or(&base_emulators.join("retroarch")).join("system").join("dc")
+            } else {
+                base_emulators.join("retroarch").join("system").join("dc")
+            }
+        }
+        _ => base_emulators.join(system).join("bios"),
+    }
+}
+
+fn has_valid_bios_file(dir: &Path, allowed_extensions: &[&str]) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                let ext_lower = ext.to_ascii_lowercase();
+                if allowed_extensions.contains(&ext_lower.as_str()) {
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.len() > 1024 {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } else if path.is_dir() {
+            if let Ok(sub_entries) = fs::read_dir(&path) {
+                for sub in sub_entries.flatten() {
+                    let sub_path = sub.path();
+                    if sub_path.is_file() {
+                        if let Some(ext) = sub_path.extension().and_then(|e| e.to_str()) {
+                            let ext_lower = ext.to_ascii_lowercase();
+                            if allowed_extensions.contains(&ext_lower.as_str()) {
+                                if let Ok(meta) = sub.metadata() {
+                                    if meta.len() > 1024 {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_rpcs3_firmware_installed(config: &AppConfig, state: &AppState) -> bool {
+    let mut candidate_dirs: Vec<PathBuf> = Vec::new();
+
+    if let Some(exe) = detect_emulator(config, "rpcs3") {
+        if let Some(parent) = exe.parent() {
+            candidate_dirs.push(parent.join("dev_flash"));
+        }
+    }
+
+    let base_emulators = config
+        .library_path
+        .clone()
+        .unwrap_or_else(|| state.data_dir.join("Library"))
+        .join("emulators");
+    candidate_dirs.push(base_emulators.join("rpcs3").join("dev_flash"));
+
+    if let Some(appdata) = env::var_os("APPDATA") {
+        candidate_dirs.push(PathBuf::from(appdata).join("rpcs3").join("dev_flash"));
+    }
+    if let Some(localappdata) = env::var_os("LOCALAPPDATA") {
+        candidate_dirs.push(PathBuf::from(localappdata).join("rpcs3").join("dev_flash"));
+    }
+
+    let check_firmware_dir = |dir: &Path| -> bool {
+        if !dir.is_dir() {
+            return false;
+        }
+        // Quando o firmware .PUP do PS3 é instalado, a pasta dev_flash contém
+        // subpastas obrigatórias como "vsh" ou "sys", repletas de arquivos do sistema.
+        let vsh = dir.join("vsh");
+        let sys = dir.join("sys");
+        if vsh.is_dir() {
+            if let Ok(mut it) = fs::read_dir(&vsh) {
+                if it.next().is_some() {
+                    return true;
+                }
+            }
+        }
+        if sys.is_dir() {
+            if let Ok(mut it) = fs::read_dir(&sys) {
+                if it.next().is_some() {
+                    return true;
+                }
+            }
+        }
+        if let Ok(entries) = fs::read_dir(dir) {
+            let mut count = 0;
+            for entry in entries.flatten() {
+                count += 1;
+                if entry.path().is_file() {
+                    return true;
+                }
+                if count >= 2 {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    candidate_dirs.iter().any(|dir| check_firmware_dir(dir))
+}
+
+fn check_bios_missing(config: &AppConfig, state: &AppState, system: &str) -> Option<String> {
+    match system {
+        "ps1" => {
+            let dir = get_bios_dest_dir(config, state, "ps1");
+            if !has_valid_bios_file(&dir, &["bin", "rom", "img"]) {
+                return Some("A BIOS deste sistema ainda não foi configurada. Ela é necessária para iniciar o jogo.".into());
+            }
+        }
+        "ps2" => {
+            let dir = get_bios_dest_dir(config, state, "ps2");
+            if !has_valid_bios_file(&dir, &["bin", "rom"]) {
+                return Some("A BIOS deste sistema ainda não foi configurada. Ela é necessária para iniciar o jogo.".into());
+            }
+        }
+        "ps3" => {
+            if !is_rpcs3_firmware_installed(config, state) {
+                return Some("O firmware do PlayStation 3 ainda não foi instalado no RPCS3. Ele é necessário para iniciar o jogo.".into());
+            }
+        }
+        "dreamcast" => {
+            let dir = get_bios_dest_dir(config, state, "dreamcast");
+            let retroarch_system = dir.parent().unwrap_or(&dir);
+            if !has_valid_bios_file(&dir, &["bin"]) && !has_valid_bios_file(retroarch_system, &["bin"]) {
+                return Some("A BIOS deste sistema ainda não foi configurada. Ela é necessária para iniciar o jogo.".into());
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+#[tauri::command]
+fn check_bios_installed(system: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let config: AppConfig = read_json(&state.config_path());
+    Ok(check_bios_missing(&config, &state, &system).is_none())
+}
+
+#[tauri::command]
+fn check_bios_exists(system: String, state: State<'_, AppState>) -> Result<bool, String> {
+    check_bios_installed(system, state)
+}
+
+#[tauri::command]
+fn scan_and_import_bios(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<BiosScanResult, String> {
+    let download_dir = app
+        .path()
+        .download_dir()
+        .ok()
+        .or_else(|| env::var_os("USERPROFILE").map(|u| PathBuf::from(u).join("Downloads")))
+        .ok_or_else(|| "Não foi possível localizar a pasta Downloads do sistema operacional.".to_string())?;
+
+    if !download_dir.is_dir() {
+        return Err("A pasta Downloads do sistema não existe ou não pode ser acessada.".into());
+    }
+
+    let config: AppConfig = read_json(&state.config_path());
+    let mut imported = Vec::new();
+    let mut ps3_detected = false;
+    let mut ps3_file = None;
+
+    let entries = fs::read_dir(&download_dir)
+        .map_err(|e| format!("Não foi possível ler a pasta Downloads: {e}"))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        let lower = name.to_ascii_lowercase();
+
+        // 1. PS2: PS2_BIOS.zip
+        if (lower.starts_with("ps2_bios") || lower.starts_with("ps2 bios") || lower == "ps2.zip")
+            && lower.ends_with(".zip")
+        {
+            let dest_dir = get_bios_dest_dir(&config, &state, "ps2");
+            fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+            let dest_zip = dest_dir.join(name);
+            move_or_copy_file(&path, &dest_zip)?;
+            let count = extract_zip_bios(&dest_zip, &dest_dir)?;
+            imported.push(ImportedBiosInfo {
+                system: "ps2".into(),
+                console_name: "PlayStation 2".into(),
+                emulator_id: "pcsx2".into(),
+                source_file: name.to_string(),
+                extracted_files_count: count,
+                destination_dir: dest_dir.to_string_lossy().to_string(),
+            });
+            continue;
+        }
+
+        // 2. PS1: PS1_BIOS.zip
+        if (lower.starts_with("ps1_bios") || lower.starts_with("ps1 bios") || lower == "ps1.zip")
+            && lower.ends_with(".zip")
+        {
+            let dest_dir = get_bios_dest_dir(&config, &state, "ps1");
+            fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+            let dest_zip = dest_dir.join(name);
+            move_or_copy_file(&path, &dest_zip)?;
+            let count = extract_zip_bios(&dest_zip, &dest_dir)?;
+            imported.push(ImportedBiosInfo {
+                system: "ps1".into(),
+                console_name: "PlayStation 1".into(),
+                emulator_id: "duckstation".into(),
+                source_file: name.to_string(),
+                extracted_files_count: count,
+                destination_dir: dest_dir.to_string_lossy().to_string(),
+            });
+            continue;
+        }
+
+        // 3. Dreamcast: Dreamcast.zip
+        if (lower.starts_with("dreamcast") || lower.starts_with("dc_bios") || lower == "dc.zip")
+            && lower.ends_with(".zip")
+        {
+            let dest_dir = get_bios_dest_dir(&config, &state, "dreamcast");
+            fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+            let dest_zip = dest_dir.join(name);
+            move_or_copy_file(&path, &dest_zip)?;
+            let count = extract_zip_bios(&dest_zip, &dest_dir)?;
+            imported.push(ImportedBiosInfo {
+                system: "dreamcast".into(),
+                console_name: "Dreamcast".into(),
+                emulator_id: "retroarch".into(),
+                source_file: name.to_string(),
+                extracted_files_count: count,
+                destination_dir: dest_dir.to_string_lossy().to_string(),
+            });
+            continue;
+        }
+
+        // 4. PS3: PlayStation 3   Bios.zip ou PS3UPDAT.PUP
+        if (lower.contains("playstation 3") && lower.ends_with(".zip"))
+            || (lower.contains("playstation3") && lower.ends_with(".zip"))
+            || lower == "ps3updat.pup"
+            || (lower.starts_with("ps3_bios") && lower.ends_with(".zip"))
+        {
+            ps3_detected = true;
+            ps3_file = Some(name.to_string());
+        }
+    }
+
+    if ps3_detected {
+        if let Some(emulator) = detect_emulator(&config, "rpcs3") {
+            if let Some(parent) = emulator.parent() {
+                let _ = ensure_rpcs3_settings(parent);
+            }
+        }
+    }
+
+    if !imported.is_empty() {
+        let names: Vec<&str> = imported.iter().map(|item| item.console_name.as_str()).collect();
+        let mut msg = format!(
+            "Configuração automática concluída! BIOS configuradas para: {}.",
+            names.join(", ")
+        );
+        if ps3_detected {
+            msg.push_str(" O firmware do PS3 foi localizado em Downloads. Instale-o pelo RPCS3 em 'File > Install Firmware'.");
+        }
+        Ok(BiosScanResult {
+            found: true,
+            imported,
+            ps3_detected,
+            ps3_file,
+            message: msg,
+        })
+    } else if ps3_detected {
+        Ok(BiosScanResult {
+            found: true,
+            imported,
+            ps3_detected: true,
+            ps3_file,
+            message: "Arquivo de Firmware do PlayStation 3 localizado na pasta Downloads! Abra o RPCS3 e instale pelo menu 'File > Install Firmware'.".into(),
+        })
+    } else {
+        Ok(BiosScanResult {
+            found: false,
+            imported: vec![],
+            ps3_detected: false,
+            ps3_file: None,
+            message: "Não foi possível localizar os arquivos na sua pasta de Downloads. Por favor, importe-os manualmente.".into(),
+        })
+    }
+}
+
+#[tauri::command]
+fn import_bios_zip(
+    file_path: String,
+    target_system: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<BiosImportResult, String> {
+    let source = PathBuf::from(file_path);
+    if !source.is_file() {
+        return Err("O arquivo selecionado não existe.".into());
+    }
+
+    let file_name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Nome de arquivo inválido.".to_string())?
+        .to_string();
+
+    let lower = file_name.to_ascii_lowercase();
+    if !lower.ends_with(".zip") {
+        return Err("Por favor, selecione um arquivo no formato .zip.".into());
+    }
+
+    let system = if let Some(sys) = target_system {
+        sys
+    } else if lower.contains("ps2") {
+        "ps2".into()
+    } else if lower.contains("ps1") {
+        "ps1".into()
+    } else if lower.contains("dreamcast") || lower.contains("dc") {
+        "dreamcast".into()
+    } else if lower.contains("playstation 3") || lower.contains("ps3") {
+        return Ok(BiosImportResult {
+            success: true,
+            item: None,
+            is_ps3: true,
+            message: "O PS3 possui uma instalação diferente. Após baixar, abra o emulador RPCS3, vá em 'File > Install Firmware' e selecione o arquivo PS3UPDAT.PUP.".into(),
+        });
+    } else {
+        let file = fs::File::open(&source).map_err(|e| e.to_string())?;
+        if let Ok(mut archive) = zip::ZipArchive::new(file) {
+            let mut detected = "ps2";
+            for i in 0..archive.len() {
+                if let Ok(entry) = archive.by_index(i) {
+                    let ename = entry.name().to_ascii_lowercase();
+                    if ename.contains("scph39") || ename.contains("scph70") || ename.contains("erom") {
+                        detected = "ps2";
+                        break;
+                    } else if ename.contains("scph100") || ename.contains("scph55") || ename.contains("scph7001") {
+                        detected = "ps1";
+                        break;
+                    } else if ename.contains("dc_boot") || ename.contains("dc_flash") {
+                        detected = "dreamcast";
+                        break;
+                    } else if ename.contains("ps3updat.pup") {
+                        return Ok(BiosImportResult {
+                            success: true,
+                            item: None,
+                            is_ps3: true,
+                            message: "O PS3 possui uma instalação diferente. Após baixar, abra o emulador RPCS3, vá em 'File > Install Firmware' e selecione o arquivo PS3UPDAT.PUP.".into(),
+                        });
+                    }
+                }
+            }
+            detected.to_string()
+        } else {
+            "ps2".to_string()
+        }
+    };
+
+    let (console_name, emulator_id) = match system.as_str() {
+        "ps1" => ("PlayStation 1", "duckstation"),
+        "ps2" => ("PlayStation 2", "pcsx2"),
+        "dreamcast" => ("Dreamcast", "retroarch"),
+        _ => return Err("Sistema não suportado para importação de BIOS.".into()),
+    };
+
+    let config: AppConfig = read_json(&state.config_path());
+    let dest_dir = get_bios_dest_dir(&config, &state, &system);
+    fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+
+    let dest_zip = dest_dir.join(&file_name);
+    move_or_copy_file(&source, &dest_zip)?;
+    let count = extract_zip_bios(&dest_zip, &dest_dir)?;
+
+    let item = ImportedBiosInfo {
+        system: system.clone(),
+        console_name: console_name.into(),
+        emulator_id: emulator_id.into(),
+        source_file: file_name,
+        extracted_files_count: count,
+        destination_dir: dest_dir.to_string_lossy().to_string(),
+    };
+
+    Ok(BiosImportResult {
+        success: true,
+        item: Some(item),
+        is_ps3: false,
+        message: format!("BIOS do {console_name} importada e extraída com sucesso! ({count} arquivos configurados)"),
+    })
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let target = if path.is_empty() {
+        if let Some(userprofile) = env::var_os("USERPROFILE") {
+            PathBuf::from(userprofile).join("Downloads")
+        } else {
+            PathBuf::from(".")
+        }
+    } else {
+        PathBuf::from(path)
+    };
+
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg(target)
+            .spawn()
+            .map_err(|error| format!("Não foi possível abrir a pasta: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -1991,14 +2727,40 @@ fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String
         return Ok(());
     }
 
+    // Validação de BIOS pré-lançamento
+    if game.system == "ps3" {
+        if !is_rpcs3_firmware_installed(&config, &state) {
+            if let Some(emulator) = detect_emulator(&config, "rpcs3") {
+                if let Some(parent) = emulator.parent() {
+                    let _ = ensure_rpcs3_settings(parent);
+                }
+                let mut command = Command::new(&emulator);
+                if let Some(parent) = emulator.parent() {
+                    command.current_dir(parent);
+                }
+                command
+                    .spawn()
+                    .map_err(|error| format!("Não foi possível abrir o RPCS3: {error}"))?;
+                return Err("PS3_FIRMWARE_OPENED:O RPCS3 foi aberto. No emulador, acesse 'File > Install Firmware' e selecione o arquivo PS3UPDAT.PUP.".into());
+            } else {
+                return Err("O emulador RPCS3 precisa ser instalado antes de configurar o firmware.".into());
+            }
+        }
+    } else if let Some(msg) = check_bios_missing(&config, &state, &game.system) {
+        return Err(format!("BIOS_MISSING:{}:{}", game.system, msg));
+    }
+
     if game.system == "ps3" {
         if let Some(emulator) = detect_emulator(&config, "rpcs3") {
+            if let Some(parent) = emulator.parent() {
+                let _ = ensure_rpcs3_settings(parent);
+            }
             let mut command = Command::new(&emulator);
             if let Some(parent) = emulator.parent() {
                 command.current_dir(parent);
             }
             if config.settings.start_fullscreen {
-                command.arg("--fullscreen");
+                command.arg("--no-gui").arg("--fullscreen");
             }
             command.arg(&game_path);
             command
@@ -2044,6 +2806,9 @@ fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String
         emulator_settings.video.anisotropic_filtering = graphics.anisotropic_filtering;
         emulator_settings.video.vsync = graphics.vsync;
     }
+    if game.system == "wii" && emulator_settings.controller.layout == "gamecube" {
+        emulator_settings.controller.layout = "wii".into();
+    }
     apply_emulator_settings_to_disk(&emulator, &emulator_settings)?;
 
     let mut command = Command::new(&emulator);
@@ -2055,9 +2820,12 @@ fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String
             if config.settings.start_fullscreen {
                 command.arg("-fullscreen");
             }
-            command.arg("-batch").arg(&game_path);
+            command.arg("-batch").arg("--").arg(&game_path);
         }
         "duckstation" => {
+            if let Some(parent) = emulator.parent() {
+                let _ = ensure_duckstation_settings_ini(parent, config.settings.start_fullscreen);
+            }
             command.arg("-batch");
             if config.settings.start_fullscreen {
                 command.arg("-fullscreen");
@@ -2067,7 +2835,9 @@ fn launch_game(game: GameInput, state: State<'_, AppState>) -> Result<(), String
         "dolphin" => {
             command.arg("-b");
             if config.settings.start_fullscreen {
-                command.arg("-f");
+                command.arg("-C").arg("Dolphin.Display.Fullscreen=True");
+            } else {
+                command.arg("-C").arg("Dolphin.Display.Fullscreen=False");
             }
             let multisampling = match emulator_settings.video.anti_aliasing.as_str() {
                 "msaa2" => 2,
@@ -2390,6 +3160,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.maximize();
+            }
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
             let state = AppState {
@@ -2417,9 +3190,15 @@ pub fn run() {
             list_installed_games,
             configure_library,
             configure_emulator,
+            open_emulator,
             install_emulator,
             cancel_download,
             import_bios,
+            check_bios_installed,
+            check_bios_exists,
+            scan_and_import_bios,
+            import_bios_zip,
+            open_folder,
             import_local_game,
             install_game,
             launch_game,

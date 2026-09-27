@@ -21,7 +21,7 @@ console.log(`Usando catálogo de origem: ${source}`);
 const output = resolve(root, "apps", "launcher", "public", "catalog", "no-lost-media.json");
 const distOutput = resolve(root, "apps", "launcher", "dist", "catalog", "no-lost-media.json");
 const gateway = (process.env.NO_LOST_MEDIA_ARCHIVE_GATEWAY
-  ?? "https://api.nolost.media/api/stream").replace(/\/+$/, "");
+  ?? "https://archive.org/download").replace(/\/+$/, "");
 
 const systemByPlatform = {
   PS1: "ps1",
@@ -37,7 +37,7 @@ const systemByPlatform = {
   PC: "pc",
   OUTROS: "pc",
 };
-const authenticatedPlatforms = new Set(["PS2", "PS3", "PC", "OUTROS"]);
+const authenticatedPlatforms = new Set();
 
 const ps2ArchiveDataPath = resolve(root, "scripts", "data", "ps2-archive-files.json");
 let ps2ArchiveData = {};

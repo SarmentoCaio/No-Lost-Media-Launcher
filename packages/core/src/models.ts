@@ -189,3 +189,27 @@ export interface InstallProgress {
   speedBytesPerSecond?: number;
   etaSeconds?: number;
 }
+
+export interface BiosImportedItem {
+  system: string;
+  consoleName: string;
+  emulatorId: string;
+  sourceFile: string;
+  extractedFilesCount: number;
+  destinationDir: string;
+}
+
+export interface BiosScanResult {
+  found: boolean;
+  imported: BiosImportedItem[];
+  ps3Detected: boolean;
+  ps3File?: string;
+  message: string;
+}
+
+export interface BiosImportResult {
+  success: boolean;
+  item?: BiosImportedItem;
+  isPs3: boolean;
+  message: string;
+}

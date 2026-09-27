@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   ArrowUpDown,
+  Archive,
   Car,
   Check,
   ChevronRight,
@@ -32,6 +33,7 @@ import {
   Search,
   Settings,
   Shield,
+  ShieldAlert,
   SlidersHorizontal,
   Sparkles,
   Swords,
@@ -61,6 +63,7 @@ import { EmulatorSettingsDialog } from "./components/EmulatorSettingsDialog";
 import { ConsoleTabs } from "./components/ConsoleTabs";
 import { CustomDropdown } from "./components/CustomDropdown";
 import { UpdateModal } from "./components/UpdateModal";
+import { BiosAssistantModal } from "./components/BiosAssistantModal";
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
@@ -610,6 +613,8 @@ export function App() {
   const [desktopGameId, setDesktopGameId] = useState<string | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<AppRelease | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [showBiosAssistant, setShowBiosAssistant] = useState(false);
+  const [biosMissingSystem, setBiosMissingSystem] = useState<string | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
@@ -1048,9 +1053,59 @@ export function App() {
       navigate("emulators");
       return;
     }
+
+    // Validação de BIOS pré-lançamento
+    try {
+      const isBiosOk = await runtime.checkBiosInstalled(game.system);
+      if (!isBiosOk) {
+        if (game.system === "ps3") {
+          try {
+            if (runtime.openEmulator) {
+              await runtime.openEmulator("rpcs3");
+            }
+          } catch (e) {
+            console.error("Erro ao abrir RPCS3:", e);
+          }
+          notify(
+            "O RPCS3 foi aberto. No emulador, acesse 'File > Install Firmware' e selecione o arquivo PS3UPDAT.PUP para concluir a configuração.",
+            "info"
+          );
+          return;
+        }
+        setBiosMissingSystem(game.system);
+        return;
+      }
+    } catch {
+      // Se não for possível verificar antecipadamente, prossegue para launchGame
+    }
+
     try {
       await runtime.launchGame(game);
     } catch (error) {
+      const errStr = String(error);
+      if (errStr.includes("PS3_FIRMWARE_OPENED")) {
+        notify(
+          "O RPCS3 foi aberto. No emulador, acesse 'File > Install Firmware' e selecione o arquivo PS3UPDAT.PUP para concluir a configuração.",
+          "info"
+        );
+        return;
+      }
+      if (errStr.includes("BIOS_MISSING")) {
+        if (game.system === "ps3") {
+          try {
+            if (runtime.openEmulator) {
+              await runtime.openEmulator("rpcs3");
+            }
+          } catch {}
+          notify(
+            "O RPCS3 foi aberto. No emulador, acesse 'File > Install Firmware' e selecione o arquivo PS3UPDAT.PUP para concluir a configuração.",
+            "info"
+          );
+          return;
+        }
+        setBiosMissingSystem(game.system);
+        return;
+      }
       notify(readableError(error, "Não foi possível iniciar o jogo."), "error");
     }
   };
@@ -1698,7 +1753,20 @@ export function App() {
 
           {view === "emulators" && runtimeInfo && (
             <section className="standalone-section">
-              <div className="section-title"><div><span className="eyebrow">Motores do launcher</span><h2>Emuladores</h2><p>Baixe, detecte e prepare os emuladores usados por cada console.</p></div></div>
+              <div className="section-title">
+                <div>
+                  <span className="eyebrow">Motores do launcher</span>
+                  <h2>Emuladores</h2>
+                  <p>Baixe, detecte e prepare os emuladores usados por cada console.</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-bios-assistant-header"
+                  onClick={() => setShowBiosAssistant(true)}
+                >
+                  <Archive size={15} /> Assistente de BIOS
+                </button>
+              </div>
               <div className="emulator-panel emulator-panel--standalone">
                 <div className="section-title section-title--small"><div><h2>Emuladores</h2><p>O launcher escolherá automaticamente o motor certo para cada jogo.</p></div></div>
                 {runtimeInfo.emulators.map((emulator) => {
@@ -1723,7 +1791,26 @@ export function App() {
                         {task && <button type="button" disabled={stoppingDownloads.has(`emulator:${emulator.id}`)} onClick={() => void stopEmulatorDownload(emulator.id, true)} className="emulator-link emulator-link--cancel">Cancelar e apagar o download</button>}
                         <button type="button" disabled={busy} onClick={() => void editEmulatorSettings(emulator.id)} className="emulator-state emulator-state--settings"><Settings size={14} /> Configurar emulador</button>
                         <button type="button" disabled={busy} onClick={() => void configureEmulator(emulator.id)} className="emulator-link">Selecionar instalação existente</button>
-                        {emulator.biosImport && emulator.installed && <button type="button" disabled={busy} onClick={() => void importBios(emulator.id)} className="emulator-link emulator-link--bios">Adicionar minha BIOS</button>}
+                        {emulator.biosImport && emulator.installed && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setShowBiosAssistant(true)}
+                              className="emulator-link emulator-link--bios"
+                            >
+                              Assistente de BIOS
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void importBios(emulator.id)}
+                              className="emulator-link"
+                            >
+                              Adicionar arquivo .bin
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
@@ -2002,6 +2089,65 @@ export function App() {
           isUpdating={isInstallingUpdate}
           progress={updateProgress}
         />
+      )}
+
+      {showBiosAssistant && (
+        <BiosAssistantModal
+          runtime={runtime}
+          onClose={() => setShowBiosAssistant(false)}
+          onSuccessNotification={(msg) => notify(msg, "success")}
+        />
+      )}
+
+      {biosMissingSystem && (
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bios-missing-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setBiosMissingSystem(null);
+          }}
+        >
+          <div className="bios-missing-dialog">
+            <div className="bios-missing-dialog__header">
+              <div className="bios-missing-dialog__icon">
+                <ShieldAlert size={24} />
+              </div>
+              <div>
+                <span className="eyebrow">{biosMissingSystem === "ps3" ? "Firmware Necessário" : "BIOS Necessária"}</span>
+                <h3 id="bios-missing-title">{biosMissingSystem === "ps3" ? "Configuração de Firmware" : "Configuração de BIOS"}</h3>
+              </div>
+            </div>
+
+            <p className="bios-missing-dialog__body">
+              {biosMissingSystem === "ps3"
+                ? "O firmware do PlayStation 3 ainda não foi instalado no RPCS3. Ele é necessário para iniciar o jogo."
+                : "A BIOS deste sistema ainda não foi configurada. Ela é necessária para iniciar o jogo."}
+            </p>
+
+            <div className="bios-missing-dialog__actions">
+              <button
+                type="button"
+                className="dialog-secondary-action"
+                onClick={() => setBiosMissingSystem(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="primary-action"
+                onClick={() => {
+                  setBiosMissingSystem(null);
+                  navigate("emulators");
+                  setShowBiosAssistant(true);
+                }}
+              >
+                <Archive size={15} /> Configurar BIOS
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="toast-stack" aria-live="polite">

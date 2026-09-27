@@ -24,6 +24,11 @@ const RETROARCH_CORES_SIZE: u64 = 229_761_684;
 const PCSX2_VERSION: &str = "2.8.2";
 const DUCKSTATION_VERSION: &str = "2026.09.12";
 const DOLPHIN_VERSION: &str = "2609";
+const RPCS3_VERSION: &str = "0.0.42";
+const RPCS3_URL: &str =
+    "https://github.com/RPCS3/rpcs3-binaries-win/releases/download/build-77cb9423dbf3406c0b7ecf0ca73f773d7185f9a0/rpcs3-v0.0.42-20065-77cb9423_win64_msvc.7z";
+const RPCS3_SIZE: u64 = 38_479_561;
+const RPCS3_SHA256: &str = "3b90741aa9d4ac97b221bd9df24334191c17f78b5f3b4b63d61983644dfdbfc2";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +103,12 @@ pub fn manifest(id: &str) -> Option<ManagedEmulatorManifest> {
             download_size_bytes: RETROARCH_SIZE + RETROARCH_CORES_SIZE,
             download_size_label: "412 MB",
             source_name: "Libretro (oficial)",
+        }),
+        "rpcs3" => Some(ManagedEmulatorManifest {
+            version: RPCS3_VERSION,
+            download_size_bytes: RPCS3_SIZE,
+            download_size_label: "36,7 MB",
+            source_name: "RPCS3 Team (oficial)",
         }),
         _ => None,
     }
@@ -450,6 +461,12 @@ fn install_portable_emulator(
     );
     fs::write(extracted_root.join(portable_marker), b"").map_err(|error| error.to_string())?;
 
+    if id == "duckstation" {
+        let default_duckstation_ini = "[Main]\nSetupWizardIncomplete = false\nSettingsVersion = 1\nConfirmPowerOff = false\nInhibitScreensaver = true\n\n[BIOS]\nSearchDirectory = bios\n\n[AutoUpdater]\nCheckAtStartup = false\n";
+        let _ = fs::write(extracted_root.join("settings.ini"), default_duckstation_ini);
+        let _ = fs::create_dir_all(extracted_root.join("bios"));
+    }
+
     let install_dir = emulators_dir.join(id);
     let backup_dir = emulators_dir.join(format!(".{id}-previous"));
     if backup_dir.exists() {
@@ -706,6 +723,22 @@ pub fn install(
             Arc::clone(&cancel),
         ),
         "retroarch" => install_retroarch(library, channel, Arc::clone(&cancel)),
+        "rpcs3" => install_portable_emulator(
+            id,
+            library,
+            Archive {
+                file_name: "rpcs3-v0.0.42-20065-77cb9423_win64_msvc.7z",
+                url: RPCS3_URL,
+                expected_size: RPCS3_SIZE,
+                sha256: RPCS3_SHA256,
+                label: "RPCS3",
+                kind: ArchiveKind::SevenZip,
+            },
+            &["rpcs3.exe", "RPCS3.exe"],
+            "portable.txt",
+            channel,
+            Arc::clone(&cancel),
+        ),
         _ => Err("Instalador gerenciado não implementado.".into()),
     };
     if result.is_err() && cancel.should_discard() {

@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, PlatformRuntime, RemoveGameResult, RuntimeInfo } from "@nlm/core";
+import type { BiosImportResult, BiosScanResult, EmulatorInstallProgress, EmulatorSettings, Game, InstalledGame, InstallProgress, LauncherSettings, PlatformRuntime, RemoveGameResult, RuntimeInfo } from "@nlm/core";
 
 export class TauriDesktopRuntime implements PlatformRuntime {
   getInfo(): Promise<RuntimeInfo> {
@@ -64,6 +64,43 @@ export class TauriDesktopRuntime implements PlatformRuntime {
     if (typeof selected !== "string") return false;
     await invoke<void>("import_bios", { emulatorId, filePath: selected });
     return true;
+  }
+
+  checkBiosInstalled(system: string): Promise<boolean> {
+    return invoke<boolean>("check_bios_installed", { system });
+  }
+
+  checkBiosExists(system: string): Promise<boolean> {
+    return invoke<boolean>("check_bios_exists", { system });
+  }
+
+  openEmulator(emulatorId: string): Promise<void> {
+    return invoke<void>("open_emulator", { emulatorId });
+  }
+
+  scanAndImportBios(): Promise<BiosScanResult> {
+    return invoke<BiosScanResult>("scan_and_import_bios");
+  }
+
+  async importBiosZip(filePath?: string, targetSystem?: string): Promise<BiosImportResult> {
+    let path = filePath;
+    if (!path) {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        title: "Selecione o arquivo .zip da BIOS",
+        filters: [{ name: "Arquivo ZIP de BIOS", extensions: ["zip"] }],
+      });
+      if (typeof selected !== "string") {
+        return { success: false, isPs3: false, message: "Nenhum arquivo selecionado." };
+      }
+      path = selected;
+    }
+    return invoke<BiosImportResult>("import_bios_zip", { filePath: path, targetSystem });
+  }
+
+  openFolder(path?: string): Promise<void> {
+    return invoke<void>("open_folder", { path: path ?? "" });
   }
 
   async importLocalGame(game: Game): Promise<InstalledGame | null> {
